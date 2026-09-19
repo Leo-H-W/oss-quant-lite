@@ -42,6 +42,7 @@ const AiWorkbenchPage = lazy(() => import('./pages/AiWorkbenchPage'))
 const Text2SqlPage = lazy(() => import('./pages/Text2SqlPage'))
 
 const MarketDashboardPage = lazy(() => import('./pages/MarketDashboardPage'))
+const WorkbenchPage = lazy(() => import('./pages/WorkbenchPage'))
 const WatchlistPage = lazy(() => import('./pages/WatchlistPage'))
 const DragonTigerPage = lazy(() => import('./pages/DragonTigerPage'))
 const LimitUpLadderPage = lazy(() => import('./pages/LimitUpLadderPage'))
@@ -73,6 +74,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: '核心分析',
     items: [
+      { to: '/workbench', label: '人机协同工作台', icon: Briefcase },
       { to: '/stocks', label: '股票列表', icon: List },
       { to: '/analysis', label: '技术分析', icon: Activity },
       { to: '/screen', label: '选股筛选', icon: Search },
@@ -247,6 +249,7 @@ function Shell() {
           <RouteErrorBoundary>
             <Routes>
             <Route path="/" element={<LazyRoute><HomePage /></LazyRoute>} />
+            <Route path="/workbench" element={<LazyRoute><WorkbenchPage /></LazyRoute>} />
             <Route path="/stocks" element={<LazyRoute><StocksPage /></LazyRoute>} />
             <Route path="/stock/:tsCode" element={<LazyRoute><StockDetailPage /></LazyRoute>} />
             <Route path="/analysis" element={<LazyRoute><AnalysisPage /></LazyRoute>} />

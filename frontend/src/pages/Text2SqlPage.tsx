@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import EChart from '../charts/EChart'
-import { fetchSqlHistory, fetchSqlSuggestions, runSqlQuery, type Text2SqlResult, type Text2SqlSuggestion } from '../api/ai'
+import { fetchSqlHistory, fetchSqlSuggestions, runSqlQuery, runSqlTemplate, type Text2SqlResult, type Text2SqlSuggestion } from '../api/ai'
 import { EmptyState, ErrorState, Loading } from '../components/StateViews'
 import { downloadCsv, formatNumber } from '../utils/format'
+
+const BUILTIN_TEMPLATES: { id: string; name: string; category: string; description: string }[] = [
+  { id: 'ma_bullish', name: '均线多头', category: '均线', description: 'ma5>ma10>ma20' },
+  { id: 'ma_above_20', name: '站上20日线', category: '均线', description: '收盘价高于 ma20' },
+  { id: 'macd_golden_cross', name: 'MACD 金叉', category: '技术指标', description: 'DIF 上穿 DEA' },
+  { id: 'rsi_oversold', name: 'RSI6 超卖', category: '技术指标', description: 'RSI6 低于 30' },
+  { id: 'kdj_golden_cross', name: 'KDJ 金叉', category: '技术指标', description: 'K 值上穿 D 值' },
+  { id: 'pct_change_leaders', name: '涨幅榜', category: '行情', description: '最新交易日涨跌幅排名' },
+  { id: 'turnover_ranking', name: '换手率排行', category: '行情', description: '换手率从高到低' },
+  { id: 'valuation_low_pe', name: '低估值榜', category: '估值', description: 'PE(TTM) 从低到高' },
+]
 
 export default function Text2SqlPage() {
   const [query, setQuery] = useState('')
@@ -29,6 +40,20 @@ export default function Text2SqlPage() {
       if (r.error) setView('table')
     } catch (e) {
       setResult({ query: q, error: e instanceof Error ? e.message : '查询失败' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const runTemplate = async (templateId: string, name: string) => {
+    setLoading(true)
+    setResult(null)
+    try {
+      const r = await runSqlTemplate(templateId)
+      setResult({ ...r, intent: r.intent ?? { name: `模板 · ${name}`, confidence: 1 } })
+      if (r.error) setView('table')
+    } catch (e) {
+      setResult({ query: name, error: e instanceof Error ? e.message : '查询失败' })
     } finally {
       setLoading(false)
     }
@@ -110,6 +135,27 @@ export default function Text2SqlPage() {
             {suggestions.slice(0, 6).map((s) => (
               <button key={s.text} type="button" className="chip" style={{ cursor: 'pointer' }} title={s.description} onClick={() => run(s.text)}>
                 {s.text}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-body">
+          <div className="side-group-label mb-2">常用模板 · 点一下直接出数（数据随每日收盘同步刷新）</div>
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            {BUILTIN_TEMPLATES.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className="chip"
+                style={{ cursor: 'pointer' }}
+                title={`${t.category} · ${t.description}`}
+                disabled={loading}
+                onClick={() => runTemplate(t.id, t.name)}
+              >
+                {t.name}
               </button>
             ))}
           </div>

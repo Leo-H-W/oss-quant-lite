@@ -73,6 +73,56 @@ def process_query():
         return jsonify({'error': f'服务器内部错误: {str(e)}'}), 500
 
 
+@text2sql_bp.route('/run-sql', methods=['POST'])
+def run_template_sql():
+    """执行常用查询模板的固定 SQL（只读 SELECT）。
+
+    与 /query 共用同一个 QueryExecutor 执行闸口（虚拟表加载、只读连接），
+    SQL 由服务端内置模板提供，不接受前端自定义 SQL，避免绕过 NLP 安全层。
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': '请求数据为空'}), 400
+
+        template_id = (data.get('template_id') or '').strip()
+        if not template_id:
+            return jsonify({'error': '缺少 template_id'}), 400
+
+        from app.services.builtin_templates import get_builtin_template
+        tpl = get_builtin_template(template_id)
+        if not tpl:
+            return jsonify({'error': '模板不存在'}), 404
+
+        readonly_ok, readonly_error = validate_readonly_sql(tpl['sql'])
+        if not readonly_ok:
+            logger.error(f"内置模板SQL未通过只读校验: {template_id}: {readonly_error}")
+            return jsonify({'error': '模板SQL未通过只读校验'}), 500
+
+        engine = get_text2sql_engine()
+        result = engine.query_executor.execute(tpl['sql'])
+
+        if result.get('success'):
+            return jsonify({
+                'success': True,
+                'query': tpl['name'],
+                'sql': tpl['sql'],
+                'data': result.get('data', []),
+                'execution_time': result.get('execution_time'),
+                'result_count': result.get('row_count', len(result.get('data', []))),
+            })
+        return jsonify({
+            'success': False,
+            'query': tpl['name'],
+            'sql': tpl['sql'],
+            'error': result.get('error', '查询失败'),
+        }), 400
+
+    except Exception as e:
+        logger.error(f"执行模板SQL失败: {e}")
+        return jsonify({'error': f'服务器内部错误: {str(e)}'}), 500
+
+
 @text2sql_bp.route('/suggestions', methods=['GET'])
 def get_query_suggestions():
     """获取查询建议"""

@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import subprocess
+import sys
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -9,6 +10,17 @@ class ScriptRunner:
 
     def __init__(self, project_root: Optional[Path] = None):
         self.project_root = project_root or Path(__file__).resolve().parents[3]
+
+    @staticmethod
+    def _python_executable() -> str:
+        """执行任务脚本的 Python 解释器。
+
+        必须用当前解释器（sys.executable）：后端本身运行在项目 venv 里，
+        子进程只有继承同一解释器才能保证 pandas/dotenv/tushare 等依赖可用。
+        写死 "python" 会按 PATH 解析到系统 Python，页面点「执行任务」直接报
+        ModuleNotFoundError。
+        """
+        return sys.executable
 
     def validate_script(self, script_path: str) -> Tuple[bool, str]:
         full_path = self.project_root / script_path
@@ -79,11 +91,16 @@ class ScriptRunner:
 
         try:
             return subprocess.run(
-                ["python", str(full_path)],
+                [self._python_executable(), str(full_path)],
                 cwd=str(self.project_root),
                 env=merged_env,
                 capture_output=True,
                 text=True,
+                # 脚本输出是 UTF-8（含中文日志与彩色转义）；text=True 默认按
+                # 系统区域编码（中文 Windows 为 GBK）解码会直接 UnicodeDecodeError，
+                # 读线程崩溃导致任务结果被吞。显式指定 UTF-8 并容错替换。
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 timeout=timeout,
             )
@@ -92,7 +109,7 @@ class ScriptRunner:
             # 走正常的失败落盘流程，而不是把异常抛给 worker 日志后无人知晓
             timed_out_text = f"script timed out after {timeout}s and was killed"
             return subprocess.CompletedProcess(
-                args=["python", str(full_path)],
+                args=[self._python_executable(), str(full_path)],
                 returncode=124,
                 stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
                 stderr=f"{(exc.stderr or '') if isinstance(exc.stderr, str) else ''}\n{timed_out_text}".strip(),

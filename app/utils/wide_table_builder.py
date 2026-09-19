@@ -1,10 +1,15 @@
 """
 大宽表构建脚本
 从 daily_basic、stk_factor、moneyflow、stock_basic 合并最新交易日数据，
-输出 stock_business.parquet（仅保留最新一天）。
+输出 stock_business_wide_day.parquet（仅保留最新一天）。
+
+注意：本脚本产物是 Tushare 体系的「最新一天快照宽表」。
+text2sql 引擎使用的 stock_business.parquet 由
+scripts/build_text2sql_wide_tables.py 从 Baostock 分区数据物化（全历史），
+两个文件互不覆盖，请勿改回写 stock_business.parquet。
 
 Usage:
-    python app/utils/wide_table_builder.py
+    .venv\\Scripts\\python.exe app/utils/wide_table_builder.py
 
 Registered as a derived job in DataJobService.
 """
@@ -19,10 +24,20 @@ _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError:
+    raise SystemExit(
+        "当前 Python 环境未安装 pandas，请使用项目虚拟环境运行：\n"
+        "  .venv\\Scripts\\python.exe app\\utils\\wide_table_builder.py"
+    )
 
 from app.services.data_reader import ParquetDataReader
 from app.utils.parquet_writer import save_single_parquet
+
+# 输出文件名：与 text2sql 的全历史宽表 stock_business.parquet 区分开，
+# 避免 Tushare 快照宽表覆盖 Baostock 全历史宽表
+OUTPUT_FILE = "stock_business_wide_day.parquet"
 
 
 # stk_factor 列 → 宽表列名映射
@@ -138,8 +153,8 @@ def build_wide_table() -> pd.DataFrame:
 def main():
     df = build_wide_table()
     if df is not None and not df.empty:
-        save_single_parquet(df, "stock_business.parquet")
-        print(f"[wide_table_builder] 写完成: {len(df)} 行, {len(df.columns)} 列")
+        save_single_parquet(df, OUTPUT_FILE)
+        print(f"[wide_table_builder] 写完成: {OUTPUT_FILE} {len(df)} 行, {len(df.columns)} 列")
     else:
         print("[wide_table_builder] 无数据可写入")
 

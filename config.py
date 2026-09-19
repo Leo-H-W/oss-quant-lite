@@ -27,10 +27,16 @@ def _build_sqlalchemy_engine_options(database_uri: str) -> dict:
 class Config:
     """基础配置类"""
 
+    # 相对路径统一解析为项目根目录下的绝对路径：
+    # Flask-SQLAlchemy 会把 sqlite 相对路径解析到 instance/ 目录，
+    # 进程工作目录又会影响裸 sqlite3 的解析，两处不一致会导致
+    # "unable to open database file"。绝对路径一劳永逸。
     SQLITE_DATABASE_PATH = os.getenv(
         "SQLITE_DATABASE_PATH",
         os.path.join(BASE_DIR, "stock_cursor.sqlite3"),
     )
+    if not os.path.isabs(SQLITE_DATABASE_PATH):
+        SQLITE_DATABASE_PATH = os.path.abspath(os.path.join(BASE_DIR, SQLITE_DATABASE_PATH))
     SQLITE_DATABASE_URI = f"sqlite:///{SQLITE_DATABASE_PATH}"
     SQLALCHEMY_DATABASE_URI = SQLITE_DATABASE_URI
     SQLALCHEMY_ENGINE_OPTIONS = _build_sqlalchemy_engine_options(SQLALCHEMY_DATABASE_URI)

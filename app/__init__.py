@@ -55,7 +55,9 @@ def create_app(config_name='default'):
     from app.routes.pattern_screen import pattern_screen_bp
     from app.api.pattern_screen_api import pattern_screen_api
     from app.api.market_api import market_bp, datasources_bp
+    from app.api.workbench_api import workbench_bp
     app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(workbench_bp, url_prefix='/api/workbench')
     app.register_blueprint(ml_factor_bp)
     app.register_blueprint(text2sql_bp)
     app.register_blueprint(realtime_analysis_bp)

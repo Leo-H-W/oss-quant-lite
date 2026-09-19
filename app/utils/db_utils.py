@@ -1,9 +1,14 @@
 import os
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # 允许在未安装 python-dotenv 的解释器下运行（如系统 Python），
+    # 此时依赖调用方传入的环境变量
+    pass
+
 import tushare as ts
-
-
-load_dotenv()
 
 
 class DatabaseUtils:

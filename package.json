@@ -1,0 +1,12 @@
+{
+  "name": "ashare-stock-workbench",
+  "private": true,
+  "version": "1.0.0",
+  "description": "行稳致远 · A股人机协同投资工作台（基于 quantitative_analysis 开源项目改造，B/S 架构 + SQLite）",
+  "scripts": {
+    "dev": "node scripts/dev.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.1"
+  }
+}

@@ -167,6 +167,16 @@ export const runSqlQuery = async (query: string): Promise<Text2SqlResult> => {
   return body
 }
 
+export const runSqlTemplate = async (templateId: string): Promise<Text2SqlResult> => {
+  const resp = await fetch('/api/text2sql/run-sql', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template_id: templateId }),
+  })
+  const body = (await resp.json()) as Text2SqlResult & { success?: boolean }
+  return body
+}
+
 export const fetchSqlHistory = async (limit = 10) => {
   const r = await rawGet<{ success: boolean; history: Record<string, unknown>[] }>('/text2sql/history', { limit })
   return r.history ?? []
