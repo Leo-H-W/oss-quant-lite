@@ -10,6 +10,7 @@
 4. 提供系统管理功能
 """
 
+import os
 import sys
 import subprocess
 import webbrowser
@@ -231,8 +232,9 @@ class SystemManager:
         
         print(f"✅ 创建了 {created_count} 个内置因子")
     
-    def start_web_server(self, host='127.0.0.1', port=5000, debug=True):
-        """启动Web服务器"""
+    def start_web_server(self, host='127.0.0.1', port=None, debug=True):
+        """启动Web服务器（默认端口与 run.py 一致，可用 PORT 环境变量覆盖）"""
+        port = port or int(os.getenv('PORT', 9090))
         print("\n启动Web服务器...")
         print(f"地址: http://{host}:{port}")
         print(f"前端界面: http://{host}:{port}/ml-factor")

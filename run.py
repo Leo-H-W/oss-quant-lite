@@ -54,7 +54,7 @@ if __name__ == '__main__':
     socketio.run(
         app,
         host='0.0.0.0',
-        port=int(os.getenv('PORT', 5000)),
+        port=int(os.getenv('PORT', 9090)),
         debug=is_debug,
         use_reloader=False,
         allow_unsafe_werkzeug=True

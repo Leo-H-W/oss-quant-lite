@@ -228,10 +228,10 @@ python run.py
 DATA_JOB_EXECUTION_MODE=inline
 日频数据中心任务将在当前 Web 进程内执行
  * Running on all addresses (0.0.0.0)
- * Running on http://127.0.0.1:5000
+ * Running on http://127.0.0.1:9090
 ```
 
-浏览器打开 http://localhost:5000/api/data-jobs/jobs 能看到 JSON 数据，说明后端正常。
+浏览器打开 http://localhost:9090/api/data-jobs/jobs 能看到 JSON 数据，说明后端正常。
 
 > ⚠️ 这个终端窗口**不要关**，关了后端就停了。想停后端按 `Ctrl + C`。
 
@@ -256,7 +256,7 @@ npm run dev
 
 浏览器打开 **http://localhost:5173** —— 这就是系统主界面。
 
-> 原理说明：前端开发服务器（5173）会自动把 API 请求转发给后端（5000），这个代理已在项目里配置好，无需额外设置。**因此浏览前端的界面时请始终用 5173 地址**，两个终端都要保持运行。
+> 原理说明：前端开发服务器（5173）会自动把 API 请求转发给后端（9090），这个代理已在项目里配置好，无需额外设置。**因此浏览前端的界面时请始终用 5173 地址**，两个终端都要保持运行。
 >
 > 以后每次使用系统 = 两个终端分别执行 `python run.py` 和（frontend 目录下）`npm run dev`。
 
@@ -292,11 +292,11 @@ npm run dev
 
 ## 10. 常见问题排查（FAQ）
 
-**Q1：启动后端报 `Address already in use` / 端口 5000 被占用？**
-macOS 的"隔空播放接收器"（AirPlay）默认占用 5000 端口：系统设置 → 通用 → 隔空播放投递 → 关闭"隔空播放接收器"。或者换端口启动：`PORT=5010 python run.py`（Windows：`set PORT=5010` 再 `python run.py`），注意此时需要把 `frontend/vite.config.ts` 里两处 `target: 'http://127.0.0.1:5000'` 的 5000 改成 5010。
+**Q1：启动后端报 `Address already in use` / 端口 9090 被占用？**
+换端口启动：`PORT=5010 python run.py`（Windows：`set PORT=5010` 再 `python run.py`），前端开发代理同步指定 `VITE_BACKEND_PORT=5010 npm run dev`（或直接改 `frontend/vite.config.ts` 里的 `backendPort` 默认值）。
 
 **Q2：前端页面能打开，但点任何功能都报错 / 提示网络错误？**
-后端没启动。回到项目根目录的终端执行 `python run.py`，前端界面的所有数据都依赖后端（5000 端口）。
+后端没启动。回到项目根目录的终端执行 `python run.py`，前端界面的所有数据都依赖后端（9090 端口）。
 
 **Q3：`python` 命令不存在 / 不是内部或外部命令？**
 Windows：安装 Python 时没勾选 "Add to PATH"，重新运行安装程序勾上；macOS：用 `python3` 代替 `python`。
@@ -336,7 +336,7 @@ cp .env.example .env    # Windows: copy .env.example .env
 docker compose up --build
 ```
 
-启动单只包含 Web 服务的容器（SQLite 与 Parquet 状态均为本地文件，无任何外部数据库/缓存依赖），访问 http://localhost:5000。
+启动单只包含 Web 服务的容器（SQLite 与 Parquet 状态均为本地文件，无任何外部数据库/缓存依赖），访问 http://localhost:9090。
 
 ---
 

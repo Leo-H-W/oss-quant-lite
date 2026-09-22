@@ -51,8 +51,8 @@ const ConceptAnalysisPage = lazy(() => import('./pages/ConceptAnalysisPage'))
 const IndustryAnalysisPage = lazy(() => import('./pages/IndustryAnalysisPage'))
 const DataSourceCenterPage = lazy(() => import('./pages/DataSourceCenterPage'))
 
-/** 旧版 Flask 前端地址：开发态 Vite 与 Flask 不同端口，直接指向 5000；构建产物由 Flask 同源托管时为空串 */
-export const OLD_SITE_BASE = import.meta.env.DEV ? 'http://127.0.0.1:5000' : ''
+/** 旧版 Flask 前端地址：开发态 Vite 与 Flask 不同端口，指向后端（默认 9090，可用 VITE_BACKEND_PORT 覆盖）；构建产物由 Flask 同源托管时为空串 */
+export const OLD_SITE_BASE = import.meta.env.DEV ? `http://127.0.0.1:${import.meta.env.VITE_BACKEND_PORT || '9090'}` : ''
 
 interface NavLeaf {
   to: string

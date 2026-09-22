@@ -101,7 +101,7 @@ https://www.python.org/downloads/windows/
 
 ### 技术架构
 - **后端**: Python 3.10–3.12 / Flask / SQLAlchemy / SocketIO
-- **前端**: React 19 / Vite 7 / TypeScript（SPA；开发态代理 `/api` 与 `/socket.io` 到后端 5000）
+- **前端**: React 19 / Vite 7 / TypeScript（SPA；开发态代理 `/api` 与 `/socket.io` 到后端 9090）
 - **数据处理**: Pandas / NumPy / Scikit-learn
 - **机器学习**: XGBoost / LightGBM / CVXPY
 - **任务执行**: 进程内（后台线程 / 本地任务注册表），无需 Redis / Celery
@@ -147,7 +147,7 @@ docker compose up --build
 运行当前已接通功能入口：
 
 ```bash
-# 终端 1：后端 API + SocketIO（端口 5000）
+# 终端 1：后端 API + SocketIO（端口 9090）
 python run.py
 
 # 终端 2：React 前端开发服务器（端口 5173）
@@ -171,8 +171,8 @@ Traceback (most recent call last):
 
 ### 4. 访问系统
 - React 界面（推荐入口）: http://localhost:5173
-- Flask 页面: http://localhost:5000
-- API入口: http://localhost:5000/api
+- Flask 页面: http://localhost:9090
+- API入口: http://localhost:9090/api
 
 ## 📖 使用指南
 
@@ -410,7 +410,7 @@ pip install -r requirements_minimal.txt
    - 个别包兼容问题时可退回 `requirements_minimal.txt`
 
 3. **前端打开但接口报错 / 无数据**
-   - 确认后端已启动（`python run.py`，端口 5000）
+   - 确认后端已启动（`python run.py`，端口 9090）
    - 开发模式下前端 5173 通过代理访问 `/api` 与 `/socket.io`，无需额外跨域配置
    - 页面无数据多为行情数据未同步，先在数据管理页面下载对应数据
 

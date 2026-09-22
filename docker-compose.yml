@@ -6,12 +6,14 @@ services:
       - SQLITE_DATABASE_PATH=/app/instance/stock_cursor.sqlite3
       - FLASK_ENV=production
       - SOCKETIO_ASYNC_MODE=eventlet
+      - PORT=9090
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
     env_file:
       - .env
     ports:
-      - "5000:5000"
+      - "9090:9090"
     volumes:
       - ./data:/app/data
       - ./instance:/app/instance
+      - ./logs:/app/logs
     restart: unless-stopped
