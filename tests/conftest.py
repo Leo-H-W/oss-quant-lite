@@ -55,5 +55,8 @@ def app():
 
     with patch.object(app_module.socketio, "init_app", return_value=None):
         flask_app = app_module.create_app("development")
+    # 全站登录守卫对既有合约测试豁免（守卫在请求期读该配置）；
+    # 认证模块自身的测试在自己的 fixture 里显式打开
+    flask_app.config["AUTH_ENABLED"] = False
     with flask_app.app_context():
         yield flask_app

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}用户管理 - QuantAnalysis{% endblock %}
+{% block content %}
+<div class="container py-4">
+    <h4 class="mb-4"><i class="fas fa-users-cog me-2"></i>用户管理</h4>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h6 class="card-title">新建用户</h6>
+            <p class="text-muted small mb-3">新用户初始密码为 <code>123456</code>，首次登录需修改密码。</p>
+            <div id="create-alert" class="alert d-none" role="alert"></div>
+            <form id="create-form" class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label" for="new-username">用户名</label>
+                    <input type="text" class="form-control" id="new-username" required>
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label" for="new-email">邮箱（用于忘记密码重置）</label>
+                    <input type="email" class="form-control" id="new-email" required>
+                </div>
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-primary w-100" id="create-btn">创建用户</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <h6 class="card-title">用户列表</h6>
+            <div id="list-alert" class="alert d-none" role="alert"></div>
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>ID</th><th>用户名</th><th>邮箱</th><th>角色</th><th>创建时间</th><th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="user-tbody">
+                    <tr><td colspan="6" class="text-muted">加载中…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+    function showAlert(id, message, isError) {
+        const box = document.getElementById(id);
+        box.textContent = message;
+        box.className = 'alert ' + (isError ? 'alert-danger' : 'alert-success');
+        box.classList.remove('d-none');
+    }
+
+    async function loadUsers() {
+        const tbody = document.getElementById('user-tbody');
+        try {
+            const resp = await apiRequest('/auth/users');
+            const users = resp.data.users;
+            if (!users.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-muted">暂无用户</td></tr>';
+                return;
+            }
+            tbody.innerHTML = users.map(u => `
+                <tr>
+                    <td>${u.id}</td>
+                    <td>${u.username}${u.must_change_password ? ' <span class="badge bg-warning text-dark">待改密</span>' : ''}</td>
+                    <td>${u.email || '-'}</td>
+                    <td>${u.is_admin ? '<span class="badge bg-primary">管理员</span>' : '普通用户'}</td>
+                    <td>${u.created_at ? u.created_at.slice(0, 10) : '-'}</td>
+                    <td>
+                        <button class="btn btn-outline-danger btn-sm" onclick="resetPassword(${u.id}, '${u.username}')">
+                            重置为123456
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-danger">加载失败</td></tr>';
+        }
+    }
+
+    async function resetPassword(userId, username) {
+        if (!confirm(`确定将用户 ${username} 的密码重置为 123456 吗？`)) return;
+        try {
+            const resp = await apiRequest(`/auth/users/${userId}/reset-password`, {method: 'POST'});
+            showAlert('list-alert', resp.message, false);
+            loadUsers();
+        } catch (err) {
+            showAlert('list-alert', (err.response && err.response.data && err.response.data.message) || '重置失败', true);
+        }
+    }
+
+    document.getElementById('create-form').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const btn = document.getElementById('create-btn');
+        btn.disabled = true;
+        try {
+            const resp = await apiRequest('/auth/users', {
+                method: 'POST',
+                data: {
+                    username: document.getElementById('new-username').value.trim(),
+                    email: document.getElementById('new-email').value.trim(),
+                },
+            });
+            showAlert('create-alert', resp.message, false);
+            document.getElementById('create-form').reset();
+            loadUsers();
+        } catch (err) {
+            showAlert('create-alert', (err.response && err.response.data && err.response.data.message) || '创建失败', true);
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    loadUsers();
+</script>
+{% endblock %}

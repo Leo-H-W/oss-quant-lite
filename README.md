@@ -174,6 +174,11 @@ Traceback (most recent call last):
 - Flask 页面: http://localhost:9090
 - API入口: http://localhost:9090/api
 
+系统已启用全站登录校验：默认账号 `admin` / `admin`，首次登录强制修改密码。
+admin 可在「用户管理」（`/users`）中新建用户（初始密码 `123456`，首次登录强制改密）与重置他人密码。
+忘记密码通过邮箱重置链接找回；未配置 SMTP（`.env` 中 `EMAIL_USERNAME`/`EMAIL_PASSWORD`）时，
+重置链接会打印到服务端日志，由管理员转告。
+
 ## 📖 使用指南
 
 ### 启动方式

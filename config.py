@@ -73,6 +73,15 @@ class Config:
     EMAIL_SMTP_PORT = int(os.getenv('EMAIL_SMTP_PORT', 587))
     EMAIL_USERNAME = os.getenv('EMAIL_USERNAME', '')
     EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
+    # 发件人显示地址，为空时回退 EMAIL_USERNAME
+    EMAIL_FROM = os.getenv('EMAIL_FROM', '')
+
+    # 用户认证：全站强制登录（测试通过 app.config['AUTH_ENABLED']=False 豁免）；
+    # 重置密码链接有效期（秒）；session cookie 收紧策略
+    AUTH_ENABLED = os.getenv('AUTH_ENABLED', 'true').lower() == 'true'
+    PASSWORD_RESET_TOKEN_MAX_AGE = int(os.getenv('PASSWORD_RESET_TOKEN_MAX_AGE', 3600))
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    SESSION_COOKIE_HTTPONLY = True
     
     # 分页配置
     DEFAULT_PAGE_SIZE = 20

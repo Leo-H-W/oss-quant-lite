@@ -388,6 +388,21 @@
                     <div class="nav-item d-flex align-items-center me-3">
                         <span class="real-time-indicator">Live</span>
                     </div>
+                    {% if g.user %}
+                    <div class="nav-item dropdown me-3" id="navbar-user-menu">
+                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                            <i class="fas fa-user-circle me-1"></i>{{ g.user.username }}
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="/change-password"><i class="fas fa-key me-1"></i>修改密码</a></li>
+                            {% if g.user.is_admin %}
+                            <li><a class="dropdown-item" href="/users"><i class="fas fa-users-cog me-1"></i>用户管理</a></li>
+                            {% endif %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="#" onclick="logout();return false;"><i class="fas fa-sign-out-alt me-1"></i>退出登录</a></li>
+                        </ul>
+                    </div>
+                    {% endif %}
                     <div class="nav-item">
                         <button class="btn btn-outline-light btn-sm" onclick="location.reload()" style="border-color:rgba(100,116,139,0.3);color:#64748b;">
                             <i class="fas fa-sync-alt me-1"></i>刷新
@@ -423,9 +438,19 @@
                 });
                 return response.data;
             } catch (error) {
+                // 会话过期/未登录：回登录页，登录后跳回当前页
+                if (error.response && error.response.status === 401) {
+                    location.href = '/login?next=' + encodeURIComponent(location.pathname);
+                }
                 console.error('API请求失败:', error);
                 throw error;
             }
+        }
+
+        // 退出登录
+        async function logout() {
+            try { await apiRequest('/auth/logout', {method: 'POST'}); } catch (e) { /* 忽略 */ }
+            location.href = '/login';
         }
 
         // 显示加载状态

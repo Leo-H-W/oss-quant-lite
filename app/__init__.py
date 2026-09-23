@@ -79,7 +79,14 @@ def create_app(config_name='default'):
 
     from app.main import main_bp
     app.register_blueprint(main_bp)
-    
+
+    # 用户认证：API 蓝图 + 页面蓝图 + 全站登录守卫
+    from app.api.auth_api import auth_bp
+    from app.auth import auth_pages_bp, init_auth_guard
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    app.register_blueprint(auth_pages_bp)
+    init_auth_guard(app)
+
     # 注册WebSocket事件处理器
     from app.websocket import websocket_events  # noqa: F401
     
