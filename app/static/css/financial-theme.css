@@ -764,3 +764,118 @@ h5, .h5 { font-size: 0.98rem; font-weight: 600; }
     outline: 2px solid var(--obs-primary);
     outline-offset: 2px;
 }
+
+/* ===== Step 15: Light Theme (data-theme="light") ===== */
+/* 仅覆盖变量与少数硬编码深色；组件全部经 var() 引用，自动跟随 */
+[data-theme="light"] {
+    --obs-bg: #f1f5f9;
+    --obs-surface: #ffffff;
+    --obs-surface-alt: #f8fafc;
+    --obs-border: #e2e8f0;
+    --obs-border-light: rgba(99,102,241,0.18);
+    --obs-border-hover: rgba(99,102,241,0.4);
+
+    --obs-text: #0f172a;
+    --obs-text-secondary: #334155;
+    --obs-text-muted: #64748b;
+
+    --obs-primary: #6366f1;
+    --obs-primary-light: #4f46e5;
+    --obs-primary-bg: rgba(99,102,241,0.08);
+    --obs-primary-glow: rgba(99,102,241,0.18);
+
+    --obs-success: #16a34a;
+    --obs-success-light: #15803d;
+    --obs-success-bg: rgba(34,197,94,0.10);
+    --obs-warning: #d97706;
+    --obs-warning-light: #b45309;
+    --obs-warning-bg: rgba(245,158,11,0.12);
+    --obs-danger: #dc2626;
+    --obs-danger-light: #b91c1c;
+    --obs-danger-bg: rgba(239,68,68,0.10);
+    --obs-info: #0891b2;
+    --obs-info-light: #0e7490;
+    --obs-info-bg: rgba(6,182,212,0.10);
+
+    /* Legacy aliases */
+    --primary-color: #6366f1;
+    --primary-light: #4f46e5;
+    --primary-dark: #4338ca;
+    --success-color: #16a34a;
+    --warning-color: #d97706;
+    --danger-color: #dc2626;
+    --info-color: #0891b2;
+    --gray-50: #f8fafc;
+    --gray-100: #f1f5f9;
+    --gray-200: #e2e8f0;
+    --gray-300: #cbd5e1;
+    --gray-400: #94a3b8;
+    --gray-500: #64748b;
+    --gray-600: #475569;
+    --gray-700: #334155;
+    --gray-800: #1e293b;
+    --gray-900: #0f172a;
+
+    --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.06);
+    --shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.08), 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+    --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.04);
+}
+
+/* 亮色模式：硬编码深色的少数组件单独覆盖 */
+[data-theme="light"] .navbar-financial {
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    border-bottom: 1px solid var(--obs-border);
+}
+
+[data-theme="light"] .navbar-financial .navbar-brand,
+[data-theme="light"] .navbar-financial .navbar-brand:hover {
+    color: var(--obs-text) !important;
+}
+
+[data-theme="light"] .navbar-financial .nav-link {
+    color: var(--obs-text-secondary) !important;
+}
+
+[data-theme="light"] .navbar-financial .nav-link:hover,
+[data-theme="light"] .navbar-financial .nav-link.active {
+    color: var(--obs-primary-light) !important;
+}
+
+[data-theme="light"] .navbar-financial .fa-bars {
+    color: var(--obs-text-secondary) !important;
+}
+
+[data-theme="light"] .table-striped > tbody > tr:nth-of-type(odd) > * {
+    background-color: rgba(15, 23, 42, 0.025);
+}
+
+[data-theme="light"] .table > :not(caption) > * > * {
+    border-bottom-color: var(--obs-border);
+}
+
+[data-theme="light"] .btn-close {
+    filter: none;
+}
+
+[data-theme="light"] .real-time-indicator {
+    background: rgba(22, 163, 74, 0.12);
+}
+
+/* 主题切换按钮 */
+.theme-toggle-btn {
+    border: 1px solid rgba(100,116,139,0.3);
+    color: var(--obs-text-muted);
+    background: transparent;
+    border-radius: var(--border-radius);
+    padding: 4px 10px;
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.theme-toggle-btn:hover {
+    color: var(--obs-primary-light);
+    border-color: var(--obs-primary);
+    background: var(--obs-primary-bg);
+}

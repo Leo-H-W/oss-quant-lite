@@ -4,6 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>{% block title %}股票分析系统{% endblock %}</title>
+
+    <!-- 主题：在样式加载前应用 localStorage 记忆，避免暗黑→亮色闪烁 -->
+    <script>
+        (function () {
+            var t = localStorage.getItem('theme');
+            if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        })();
+    </script>
     
     <!-- DM Sans Font -->
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -388,6 +396,11 @@
                     <div class="nav-item d-flex align-items-center me-3">
                         <span class="real-time-indicator">Live</span>
                     </div>
+                    <div class="nav-item d-flex align-items-center me-3">
+                        <button class="theme-toggle-btn" id="theme-toggle" onclick="toggleTheme()" title="切换亮色/暗黑模式">
+                            <i class="fas fa-sun"></i>
+                        </button>
+                    </div>
                     {% if g.user %}
                     <div class="nav-item dropdown me-3" id="navbar-user-menu">
                         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
@@ -423,6 +436,29 @@
     
     <!-- 全局JavaScript -->
     <script>
+        // 主题切换：默认暗黑，localStorage 记忆
+        function toggleTheme() {
+            const html = document.documentElement;
+            const isLight = html.getAttribute('data-theme') === 'light';
+            if (isLight) {
+                html.removeAttribute('data-theme');
+                localStorage.setItem('theme', 'dark');
+            } else {
+                html.setAttribute('data-theme', 'light');
+                localStorage.setItem('theme', 'light');
+            }
+            updateThemeIcon();
+        }
+
+        function updateThemeIcon() {
+            const icon = document.querySelector('#theme-toggle i');
+            if (!icon) return;
+            const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+            icon.className = isLight ? 'fas fa-moon' : 'fas fa-sun';
+        }
+
+        document.addEventListener('DOMContentLoaded', updateThemeIcon);
+
         // API请求函数
         async function apiRequest(url, options = {}) {
             try {
