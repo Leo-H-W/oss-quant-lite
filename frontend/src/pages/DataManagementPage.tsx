@@ -515,12 +515,12 @@ export default function DataManagementPage() {
                 <tr>
                   <th>Run ID</th>
                   <th>任务</th>
-                  <th>状态</th>
                   <th className="num">进度%</th>
                   <th>进度消息</th>
                   <th>开始时间</th>
                   <th>结束时间</th>
                   <th className="num">操作</th>
+                  <th>状态</th>
                 </tr>
               </thead>
               <tbody>
@@ -532,14 +532,6 @@ export default function DataManagementPage() {
                     >
                       <td>#{r.id}</td>
                       <td>{jobDefs.find((j) => j.job_type === r.job_type)?.display_name ?? r.job_type}</td>
-                      <td>
-                        <span
-                          className={`badge ${RUN_BADGE[r.status] ?? 'text-bg-secondary'}`}
-                          title={r.status === 'failed' ? (r.error_message ?? undefined) : undefined}
-                        >
-                          {r.status}
-                        </span>
-                      </td>
                       <td className="num" style={{ minWidth: 110 }}>
                         <div className="d-flex align-items-center gap-1">
                           <div className="progress flex-grow-1" style={{ height: 6, minWidth: 48 }}>
@@ -585,10 +577,26 @@ export default function DataManagementPage() {
                           </button>
                         )}
                       </td>
+                      <td>
+                        <span
+                          className={`badge ${RUN_BADGE[r.status] ?? 'text-bg-secondary'}`}
+                          title={r.status === 'failed' ? (r.error_message ?? undefined) : undefined}
+                        >
+                          {r.status}
+                        </span>
+                      </td>
                     </tr>
-                    {/* 行内展开的进度详情（原独立"任务进度"面板并入此处） */}
+                    {/* 行内展开的进度详情（原独立"任务进度"面板并入此处）；点击详情行同样收起 */}
                     {currentRun?.id === r.id && (
-                      <tr>
+                      <tr
+                        style={{ cursor: 'pointer' }}
+                        title="点击收起"
+                        onClick={() => {
+                          if (window.getSelection()?.toString()) return
+                          setCurrentRun(null)
+                          stopPolling()
+                        }}
+                      >
                         <td colSpan={8} style={{ background: 'var(--surface-2)' }}>
                           <div className="d-flex align-items-center gap-2 flex-wrap mb-2">
                             <span className={`badge ${RUN_BADGE[currentRun.status] ?? 'text-bg-secondary'}`}>

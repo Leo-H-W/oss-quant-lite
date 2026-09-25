@@ -189,7 +189,12 @@ class DataJobService:
             raise ValueError(f"job run not found: {run_id}")
         if run.status in ACTIVE_STATUSES:
             raise JobActiveError(f"job run {run_id} 仍处于 {run.status}，不允许重试")
-        return self.submit(run.job_type, run.params_json or {})
+        new_run = self.submit(run.job_type, run.params_json or {})
+        # 重试成功后删除原记录：新旧记录语义等价，保留两条只会让列表越攒越乱
+        delete = getattr(self.state_store, "delete_run", None)
+        if callable(delete):
+            delete(run_id)
+        return new_run
 
     def list_job_definitions(self, visible_only: bool = True):
         if visible_only:

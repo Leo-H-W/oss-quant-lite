@@ -34,6 +34,20 @@ def test_retry_preserves_original_params(app, tmp_path):
     assert new_run.params_json == original_params
 
 
+def test_retry_removes_original_record(app, tmp_path):
+    """重试成功后原记录直接删除：新旧记录语义等价，列表不应越攒越多。"""
+    store, service = _make_service(tmp_path)
+    run = store.create_run("daily_basic", {"start_date": "20260101"})
+    store.update_run_status(run, "failed", error_message="worker 中断")
+
+    with patch("app.api.data_jobs_api.get_data_job_service", return_value=service), \
+         patch("app.services.data_jobs.service.run_data_job"):
+        resp = app.test_client().post(f"/api/data-jobs/{run.id}/retry")
+
+    assert resp.status_code == 200
+    assert store.get_run(run.id) is None
+
+
 def test_retry_on_active_run_returns_400(app, tmp_path):
     """仍在进行的任务不允许重试，返回 400 而不是误报 404。"""
     store, service = _make_service(tmp_path)

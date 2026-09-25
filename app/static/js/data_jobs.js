@@ -41,23 +41,12 @@
         }
     }
 
-    function updateProgressView(run) {
-        const badge = document.getElementById("dataJobProgressBadge");
-        const progress = document.getElementById("dataJobProgress");
-        const log = document.getElementById("dataJobRunLog");
+    // 任务进度已并入最近任务表格：进度条内嵌在每行，点击行展开详情/日志
+    let lastRuns = [];
+    let latestRunDetail = null;
 
-        if (!badge || !progress || !log) return;
-
-        if (!run) {
-            badge.className = "badge bg-secondary";
-            badge.textContent = "idle";
-            progress.textContent = "暂无运行任务";
-            log.textContent = "";
-            return;
-        }
-
-        const status = run.status || "unknown";
-        const badgeColor = {
+    function statusBadgeColor(status) {
+        return {
             pending: "secondary",
             queued: "info",
             running: "primary",
@@ -65,37 +54,54 @@
             failed: "danger",
             cancelled: "warning",
         }[status] || "secondary";
+    }
 
-        badge.className = `badge bg-${badgeColor}`;
-        badge.textContent = status;
+    function progressBarHtml(progress, height) {
+        const pct = Math.min(100, Math.max(0, typeof progress === "number" ? progress : 0));
+        return `<div class="progress" style="height: ${height}px; min-width: 48px;">
+            <div class="progress-bar" role="progressbar" style="width: ${pct}%;"></div>
+        </div>`;
+    }
 
-        const percent = typeof run.progress === "number" ? `${run.progress.toFixed(1)}%` : "-";
-        const progressMessage = run.progress_message || "暂无详细进度";
-        const sourceName = run.source_name || "-";
-        const sourceMode = run.source_mode || "-";
-        const snapshotTag = run.snapshot_tag || "-";
-        progress.textContent = `run_id=${run.id} | status=${status} | progress=${percent} | message=${progressMessage} | source=${sourceName}/${sourceMode} | snapshot=${snapshotTag} | started=${formatTime(run.started_at)} | finished=${formatTime(run.finished_at)}`;
-
-        const resultJson = run.result_json || {};
-        const stdout = resultJson.stdout || "";
-        const stderr = resultJson.stderr || "";
+    function renderDetailRow(run) {
+        // 优先用轮询拿到的最新详情（含 result_json 日志）
+        const d = latestRunDetail && latestRunDetail.id === run.id ? latestRunDetail : run;
+        const status = d.status || "unknown";
+        const resultJson = d.result_json || {};
         const lines = [];
-        if (stdout) lines.push(`[stdout]\n${stdout}`);
-        if (stderr) lines.push(`[stderr]\n${stderr}`);
-        if (!stdout && !stderr && run.error_message) lines.push(run.error_message);
-        log.textContent = lines.join("\n\n");
+        if (resultJson.stdout) lines.push(`[stdout]\n${resultJson.stdout}`);
+        if (resultJson.stderr) lines.push(`[stderr]\n${resultJson.stderr}`);
+        if (!resultJson.stdout && !resultJson.stderr && d.error_message) lines.push(d.error_message);
+        const logHtml = lines.length
+            ? `<pre class="small mt-2 mb-0" style="max-height: 180px; overflow-y: auto; white-space: pre-wrap;">${lines.join("\n\n")}</pre>`
+            : "";
+        return `<tr class="data-job-detail" style="cursor: pointer;" title="点击收起"><td colspan="8" class="bg-light">
+            <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+                <span class="badge bg-${statusBadgeColor(status)}">${status}</span>
+                <span class="badge bg-light text-dark border">run #${d.id}</span>
+                <span class="badge bg-light text-dark border">${d.job_type}</span>
+                <span class="badge bg-light text-dark border">${(typeof d.progress === "number" ? d.progress : 0).toFixed(1)}%</span>
+                <span class="text-muted">source=${d.source_name || "-"}/${d.source_mode || "-"}</span>
+                <span class="text-muted">snapshot=${d.snapshot_tag || "-"}</span>
+            </div>
+            ${progressBarHtml(d.progress, 8)}
+            ${d.error_message ? `<div class="text-danger small mt-1">${d.error_message}</div>` : ""}
+            ${logHtml}
+        </td></tr>`;
     }
 
     function renderRunHistory(runs) {
         const container = document.getElementById("dataJobHistory");
         if (!container) return;
 
-        if (!Array.isArray(runs) || runs.length === 0) {
+        lastRuns = Array.isArray(runs) ? runs : [];
+
+        if (lastRuns.length === 0) {
             container.textContent = "暂无任务历史";
             return;
         }
 
-        const rows = runs
+        const rows = lastRuns
             .map((run) => {
                 const progress = typeof run.progress === "number" ? `${run.progress.toFixed(1)}%` : "-";
                 const progressMessage = run.progress_message || "-";
@@ -106,16 +112,19 @@
                 const deleteCell = ["success", "failed", "cancelled"].includes(run.status)
                     ? `<button type="button" class="btn btn-outline-danger btn-sm" data-delete-run-id="${run.id}">删除</button>`
                     : "";
+                const detailRow = currentRunId === run.id ? renderDetailRow(run) : "";
                 return `<tr data-run-id="${run.id}">
                     <td>${run.id}</td>
                     <td>${run.job_type}</td>
-                    <td>${run.status}</td>
-                    <td>${progress}</td>
+                    <td style="min-width: 110px;">
+                        <div class="d-flex align-items-center gap-1">${progressBarHtml(run.progress, 6)}<span>${progress}</span></div>
+                    </td>
                     <td>${sourceName}</td>
                     <td>${progressMessage}</td>
                     <td>${formatTime(run.finished_at || run.started_at || run.queued_at)}</td>
                     <td>${retryCell}${deleteCell}</td>
-                </tr>`;
+                    <td><span class="badge bg-${statusBadgeColor(run.status)}" title="${run.error_message || ""}">${run.status}</span></td>
+                </tr>${detailRow}`;
             })
             .join("");
 
@@ -126,12 +135,12 @@
                         <tr>
                             <th>Run ID</th>
                             <th>任务</th>
-                            <th>状态</th>
                             <th>进度</th>
                             <th>来源</th>
                             <th>进度消息</th>
                             <th>时间</th>
                             <th>操作</th>
+                            <th>状态</th>
                         </tr>
                     </thead>
                     <tbody>${rows}</tbody>
@@ -139,14 +148,34 @@
             </div>
         `;
 
-        container.querySelectorAll("tbody tr").forEach((row) => {
+        container.querySelectorAll("tbody tr[data-run-id]").forEach((row) => {
             row.addEventListener("click", function () {
                 const runId = Number(this.getAttribute("data-run-id"));
-                if (!Number.isNaN(runId) && runId > 0) {
-                    currentRunId = runId;
-                    fetchRunStatus(runId);
-                    startPolling(runId);
+                if (Number.isNaN(runId) || runId <= 0) return;
+                if (currentRunId === runId) {
+                    // 再次点击收起详情
+                    currentRunId = null;
+                    latestRunDetail = null;
+                    stopPolling();
+                    renderRunHistory(lastRuns);
+                    return;
                 }
+                currentRunId = runId;
+                latestRunDetail = null;
+                renderRunHistory(lastRuns);
+                fetchRunStatus(runId);
+                startPolling(runId);
+            });
+        });
+
+        // 展开的详情行点击同样收起（选中日志文本复制时不收起）
+        container.querySelectorAll("tr.data-job-detail").forEach((row) => {
+            row.addEventListener("click", function () {
+                if (window.getSelection && window.getSelection().toString()) return;
+                currentRunId = null;
+                latestRunDetail = null;
+                stopPolling();
+                renderRunHistory(lastRuns);
             });
         });
 
@@ -231,7 +260,13 @@
                 showDataJobResult(`获取任务状态失败: ${data.error || "未知错误"}`, "warning");
                 return null;
             }
-            updateProgressView(data.run);
+            latestRunDetail = data.run;
+            // 轮询结果同步回列表行并重渲染：进度条/详情保持鲜活
+            const idx = lastRuns.findIndex((r) => r.id === data.run.id);
+            if (idx >= 0) {
+                lastRuns[idx] = data.run;
+                renderRunHistory(lastRuns);
+            }
             return data.run;
         } catch (error) {
             console.error("获取任务状态失败:", error);
@@ -439,7 +474,6 @@
 
         bindRecommendedJobButtons();
         renderInitializationStatus(readInitializationStatus());
-        updateProgressView(null);
         loadJobTypes();
         loadRunHistory();
 
