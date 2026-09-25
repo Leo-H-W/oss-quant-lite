@@ -7,12 +7,17 @@ ParquetDataReader — 从本地 Parquet 文件加载日行情数据，替代传�
 """
 
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
 from app.services.minute_parquet_reader import MinuteParquetReader
+
+
+# 已告警过的缺失目录：数据未下载属正常状态（如 stk_factor 未跑过下载任务），
+# 同一目录只 WARNING 一次，避免每次读价都刷日志；后续降为 DEBUG
+_missing_dir_warned: Set[str] = set()
 
 
 class ParquetDataReader:
@@ -458,7 +463,11 @@ class ParquetDataReader:
 
         base = os.path.join(self.data_dir, self.TABLE_DIRS[table])
         if not os.path.isdir(base):
-            logger.warning(f"Parquet 目录不存在: {base}")
+            if base not in _missing_dir_warned:
+                _missing_dir_warned.add(base)
+                logger.warning(f"Parquet 目录不存在: {base}（对应数据尚未下载，返回空结果；后续不再重复告警）")
+            else:
+                logger.debug(f"Parquet 目录不存在: {base}")
             return pd.DataFrame()
 
         frames = []
