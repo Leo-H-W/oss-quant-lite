@@ -23,7 +23,11 @@
 | 数据任务 API 列表过滤合约 | tests/api/test_data_jobs_api_list_filters.py | module_data_jobs |
 | 数据任务 UI 入口合约 | tests/ui/test_data_jobs_ui_contract.py | module_data_jobs |
 | 数据任务 UI 进度合约 | tests/ui/test_data_jobs_ui_progress_contract.py | module_data_jobs |
-| 数据任务指引定位合约 | tests/ui/test_data_jobs_guide_positioning_contract.py | module_data_jobs |
+| 活性注册表与孤儿收割合约 | tests/data_jobs/test_liveness_reap.py | module_data_jobs |
+| 任务删除合约 | tests/data_jobs/test_delete_run.py | module_data_jobs |
+| 数据任务重试 API 合约 | tests/api/test_data_jobs_retry_api.py | module_data_jobs |
+| 数据任务删除 API 合约 | tests/api/test_data_jobs_delete_api.py | module_data_jobs |
+| 任务进度页重试入口合约 | tests/ui/test_data_jobs_ui_retry_contract.py | module_data_jobs |
 
 ## 数值软目标（M1 里程碑 review 时人工确认）
 - 无（数据下载模块以结构性合约为主，数值目标由下游模块负责）
@@ -32,5 +36,5 @@
 - 无（数据入口模块）
 
 ## 验收状态
-- [ ] 结构性合约：CI 绿（pytest -m module_data_jobs）
+- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed）
 - [ ] 数值软目标：N/A

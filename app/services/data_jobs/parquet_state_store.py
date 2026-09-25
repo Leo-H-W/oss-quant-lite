@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
@@ -209,6 +209,55 @@ class ParquetDataJobStateStore:
                 )
             )
         return reaped
+
+    def reap_orphan_runs(self, is_active: Callable[[int], bool]) -> List[DataJobRunRecord]:
+        """把状态停在 pending/queued/running 但已无活跃线程的孤儿 run 标记为 failed。
+
+        is_active: 判活回调（生产方传 data_jobs_tasks.is_run_active，即进程内
+        注册表）。数据任务线程是 daemon 线程、只随进程退出，因此"在册 = 存活"
+        是精确判活：在册的一律跳过；不在册且非终态的只可能是进程重启留下的孤儿。
+        回调在表锁内对每个候选逐个复查——调用方先快照再扫描的话，快照之后才
+        提交并在册的 run 会被误清（TOCTOU）。与 BacktestRepository.reap_stale_runs
+        同一模式。
+        """
+        reaped_ids: List[int] = []
+        with self.store.locked(self.TABLE_RUNS):
+            df = self.store.read_frame(self.TABLE_RUNS)
+            if df.empty or "id" not in df.columns:
+                return []
+            changed = False
+            now = _now_iso()
+            for idx, row in df.iterrows():
+                if str(row.get("status")) not in {"pending", "queued", "running"}:
+                    continue
+                run_id = int(_to_python(row.get("id")) or 0)
+                if is_active(run_id):
+                    continue
+                row_mask = df.index == idx
+                df.loc[row_mask, "status"] = "failed"
+                df.loc[row_mask, "error_message"] = (
+                    "任务线程已不存在（进程可能中断或重启），判定为孤儿任务并强制失败"
+                )
+                df.loc[row_mask, "progress_message"] = "已中断，可重试"
+                df.loc[row_mask, "finished_at"] = now
+                df.loc[row_mask, "updated_at"] = now
+                reaped_ids.append(run_id)
+                changed = True
+            if changed:
+                self.store.write_frame(self.TABLE_RUNS, df)
+        return [run for run in (self.get_run(run_id) for run_id in reaped_ids) if run is not None]
+
+    def delete_run(self, run_id: int) -> bool:
+        """物理删除一条 run 记录。是否允许删除（活跃判定）由调用方负责。"""
+        with self.store.locked(self.TABLE_RUNS):
+            df = self.store.read_frame(self.TABLE_RUNS)
+            if df.empty or "id" not in df.columns:
+                return False
+            mask = pd.to_numeric(df["id"], errors="coerce") == int(run_id)
+            if not mask.any():
+                return False
+            self.store.write_frame(self.TABLE_RUNS, df[~mask].reset_index(drop=True))
+            return True
 
     def get_run(self, run_id: int) -> Optional[DataJobRunRecord]:
         df = self.store.read_frame(self.TABLE_RUNS)

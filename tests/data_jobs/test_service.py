@@ -60,7 +60,8 @@ def test_service_uses_store_for_list_runs_and_get_run(tmp_path):
     store = ParquetDataJobStateStore(base_dir=str(tmp_path / "state"))
     run = store.create_run("stock_basic", {"start_date": "20260101"})
     store.update_run_status(run, "queued", progress=0.0, progress_message="任务已入队")
-    service = DataJobService(state_store=store)
+    # is_active=True：模拟该 run 的执行线程仍在册（读时判活不会把它当孤儿清理）
+    service = DataJobService(state_store=store, is_active=lambda run_id: True)
 
     runs = service.list_runs(limit=10, status="queued")
     fetched = service.get_run(run.id)

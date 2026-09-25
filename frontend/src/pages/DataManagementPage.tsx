@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   aggregateMinuteData,
   buildWideTable,
@@ -11,6 +11,8 @@ import {
   fetchMinuteSyncStatus,
   fetchWideTableStatus,
   submitDataJob,
+  retryDataJob,
+  deleteDataJob,
   syncMinuteData,
   syncMinuteMultiple,
   type DataJobDef,
@@ -115,6 +117,8 @@ export default function DataManagementPage() {
       try {
         const r = await fetchDataJobRun(runId)
         setCurrentRun(r.run)
+        // 轮询结果同步回列表行：进度已合并进表格，行数据要保持鲜活
+        setRuns((prev) => prev.map((x) => (x.id === r.run.id ? r.run : x)))
         if (['success', 'failed', 'cancelled'].includes(r.run.status)) {
           if (pollTimer.current) clearInterval(pollTimer.current)
           appendLog(`任务 #${runId} 结束：${r.run.status}`)
@@ -125,6 +129,24 @@ export default function DataManagementPage() {
         if (pollTimer.current) clearInterval(pollTimer.current)
       }
     }, 3000)
+  }
+
+  const stopPolling = () => {
+    if (pollTimer.current) {
+      clearInterval(pollTimer.current)
+      pollTimer.current = null
+    }
+  }
+
+  // 点击行展开/收起该任务的进度详情（再次点击同一行收起）
+  const toggleRunDetail = (r: DataJobRun) => {
+    if (currentRun?.id === r.id) {
+      setCurrentRun(null)
+      stopPolling()
+      return
+    }
+    setCurrentRun(r)
+    startPolling(r.id)
   }
 
   const submitJob = async (type = jobType) => {
@@ -142,6 +164,39 @@ export default function DataManagementPage() {
       setJobError(e instanceof Error ? e.message : '提交失败')
     } finally {
       setJobBusy(false)
+    }
+  }
+
+  // 重试走 /retry API：后端按原 params_json 重新提交（保留原日期参数）
+  const retryJob = async (runId: number) => {
+    setJobBusy(true)
+    setJobError(null)
+    setJobMsg(null)
+    try {
+      const r = await retryDataJob(runId)
+      setJobMsg(`已重试：新 run #${r.run_id}（${r.status}）`)
+      appendLog(`重试 run #${runId} → 新 run #${r.run_id}`)
+      setCurrentRun(null)
+      startPolling(r.run_id)
+      fetchDataJobRuns(20).then((x) => setRuns(x.runs)).catch(() => undefined)
+    } catch (e) {
+      setJobError(e instanceof Error ? e.message : '重试失败')
+    } finally {
+      setJobBusy(false)
+    }
+  }
+
+  // 删除任务记录：仅终态任务可删（后端对活跃任务返回 400）
+  const deleteJob = async (runId: number) => {
+    if (!window.confirm(`确定删除任务 #${runId} 的记录吗？`)) return
+    setJobError(null)
+    try {
+      await deleteDataJob(runId)
+      appendLog(`删除任务记录 #${runId}`)
+      if (currentRun?.id === runId) setCurrentRun(null)
+      fetchDataJobRuns(20).then((x) => setRuns(x.runs)).catch(() => undefined)
+    } catch (e) {
+      setJobError(e instanceof Error ? e.message : '删除失败')
     }
   }
 
@@ -453,45 +508,7 @@ export default function DataManagementPage() {
             </div>
           )}
 
-          {/* 任务进度面板 */}
-          {currentRun && (
-            <div className="mt-3 p-3 rounded" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-              <div className="d-flex align-items-center gap-2 flex-wrap mb-2">
-                <span className={`badge ${RUN_BADGE[currentRun.status] ?? 'text-bg-secondary'}`}>{currentRun.status}</span>
-                <span className="chip">run #{currentRun.id}</span>
-                <span className="chip">{currentRun.job_type}</span>
-                <span className="chip">{currentRun.progress.toFixed(1)}%</span>
-                {currentRun.progress_message && <span className="chip">{currentRun.progress_message}</span>}
-                {currentRun.error_message && <span className="delta down">{currentRun.error_message}</span>}
-              </div>
-              <div className="progress mb-2" style={{ height: 8 }}>
-                <div
-                  className="progress-bar"
-                  style={{ width: `${Math.min(100, Math.max(0, currentRun.progress))}%` }}
-                  role="progressbar"
-                />
-              </div>
-              {(currentRun.result_json?.stdout || currentRun.result_json?.stderr) && (
-                <pre
-                  style={{
-                    maxHeight: 180,
-                    overflow: 'auto',
-                    fontSize: 11.5,
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    padding: 10,
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {currentRun.result_json?.stdout}
-                  {currentRun.result_json?.stderr}
-                </pre>
-              )}
-            </div>
-          )}
-
-          {/* 最近任务 */}
+          {/* 最近任务（进度已合并：点行展开详情，进度条在 进度% 列内） */}
           <div className="table-container mt-3" style={{ maxHeight: 320 }}>
             <table className="data-table">
               <thead>
@@ -508,41 +525,110 @@ export default function DataManagementPage() {
               </thead>
               <tbody>
                 {runs.map((r) => (
-                  <tr
-                    key={r.id}
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => {
-                      setCurrentRun(r)
-                      startPolling(r.id)
-                    }}
-                  >
-                    <td>#{r.id}</td>
-                    <td>{jobDefs.find((j) => j.job_type === r.job_type)?.display_name ?? r.job_type}</td>
-                    <td>
-                      <span className={`badge ${RUN_BADGE[r.status] ?? 'text-bg-secondary'}`}>{r.status}</span>
-                    </td>
-                    <td className="num">{r.progress.toFixed(0)}</td>
-                    <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {r.progress_message ?? '--'}
-                    </td>
-                    <td>{formatDateTime(r.started_at)}</td>
-                    <td>{formatDateTime(r.finished_at)}</td>
-                    <td className="num">
-                      {r.status === 'failed' && (
-                        <button
-                          type="button"
-                          className="btn btn-outline-secondary btn-sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setJobType(r.job_type)
-                            submitJob(r.job_type)
-                          }}
+                  <Fragment key={r.id}>
+                    <tr
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => toggleRunDetail(r)}
+                    >
+                      <td>#{r.id}</td>
+                      <td>{jobDefs.find((j) => j.job_type === r.job_type)?.display_name ?? r.job_type}</td>
+                      <td>
+                        <span
+                          className={`badge ${RUN_BADGE[r.status] ?? 'text-bg-secondary'}`}
+                          title={r.status === 'failed' ? (r.error_message ?? undefined) : undefined}
                         >
-                          重试
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td className="num" style={{ minWidth: 110 }}>
+                        <div className="d-flex align-items-center gap-1">
+                          <div className="progress flex-grow-1" style={{ height: 6, minWidth: 48 }}>
+                            <div
+                              className="progress-bar"
+                              style={{ width: `${Math.min(100, Math.max(0, r.progress))}%` }}
+                              role="progressbar"
+                            />
+                          </div>
+                          <span>{r.progress.toFixed(0)}</span>
+                        </div>
+                      </td>
+                      <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.progress_message ?? '--'}
+                      </td>
+                      <td>{formatDateTime(r.started_at)}</td>
+                      <td>{formatDateTime(r.finished_at)}</td>
+                      <td className="num">
+                        {['success', 'failed', 'cancelled'].includes(r.status) && (
+                          <button
+                            type="button"
+                            className="btn btn-outline-secondary btn-sm"
+                            disabled={jobBusy}
+                            title="按原参数重新执行；写入按交易日分区原子覆盖，不会产生重复数据"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              retryJob(r.id)
+                            }}
+                          >
+                            重试
+                          </button>
+                        )}
+                        {['success', 'failed', 'cancelled'].includes(r.status) && (
+                          <button
+                            type="button"
+                            className="btn btn-outline-danger btn-sm ms-1"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              deleteJob(r.id)
+                            }}
+                          >
+                            删除
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {/* 行内展开的进度详情（原独立"任务进度"面板并入此处） */}
+                    {currentRun?.id === r.id && (
+                      <tr>
+                        <td colSpan={8} style={{ background: 'var(--surface-2)' }}>
+                          <div className="d-flex align-items-center gap-2 flex-wrap mb-2">
+                            <span className={`badge ${RUN_BADGE[currentRun.status] ?? 'text-bg-secondary'}`}>
+                              {currentRun.status}
+                            </span>
+                            <span className="chip">run #{currentRun.id}</span>
+                            <span className="chip">{currentRun.job_type}</span>
+                            <span className="chip">{currentRun.progress.toFixed(1)}%</span>
+                            {currentRun.progress_message && <span className="chip">{currentRun.progress_message}</span>}
+                            {currentRun.error_message && <span className="delta down">{currentRun.error_message}</span>}
+                          </div>
+                          <div className="progress mb-2" style={{ height: 8 }}>
+                            <div
+                              className="progress-bar"
+                              style={{ width: `${Math.min(100, Math.max(0, currentRun.progress))}%` }}
+                              role="progressbar"
+                            />
+                          </div>
+                          {(currentRun.result_json?.stdout || currentRun.result_json?.stderr) && (
+                            <pre
+                              style={{
+                                maxHeight: 180,
+                                overflow: 'auto',
+                                fontSize: 11.5,
+                                background: 'var(--surface)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                padding: 10,
+                                whiteSpace: 'pre-wrap',
+                                margin: 0,
+                              }}
+                            >
+                              {currentRun.result_json?.stdout}
+                              {currentRun.result_json?.stderr}
+                            </pre>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
                 {runs.length === 0 && (
                   <tr>

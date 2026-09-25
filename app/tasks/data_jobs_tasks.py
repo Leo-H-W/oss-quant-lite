@@ -7,6 +7,36 @@ from app.services.data_jobs.registry import JobRegistry
 from app.services.data_jobs.runner import ScriptRunner
 
 
+# ---------------------------------------------------------------------------
+# 进程内活性注册表（与 backtest_tasks 同一模式）
+#
+# 单机单进程：数据任务线程是 daemon 线程，只可能随进程一起消失。因此
+# "run 是否有活着的线程"可用注册表精确判定：
+#   在册                       → 线程存活，绝不清理
+#   不在册且 pending/queued/running → 只可能是上个进程中断留下的孤儿
+# ---------------------------------------------------------------------------
+import threading
+from typing import Set
+
+_active_lock = threading.Lock()
+_active_run_ids: Set[int] = set()
+
+
+def mark_run_active(run_id: int) -> None:
+    with _active_lock:
+        _active_run_ids.add(int(run_id))
+
+
+def clear_run_active(run_id: int) -> None:
+    with _active_lock:
+        _active_run_ids.discard(int(run_id))
+
+
+def is_run_active(run_id: int) -> bool:
+    with _active_lock:
+        return int(run_id) in _active_run_ids
+
+
 def _build_app():
     return create_app("development")
 
@@ -30,7 +60,14 @@ def run_data_job(run_id: int):
     任何阶段的异常都必须把 run 落盘为 failed，否则状态会永远停在
     running，界面上无从得知任务已经死了。
     """
+    mark_run_active(run_id)
+    try:
+        return _run_data_job(run_id)
+    finally:
+        clear_run_active(run_id)
 
+
+def _run_data_job(run_id: int):
     app = _build_app()
     with app.app_context():
         store = _build_state_store()

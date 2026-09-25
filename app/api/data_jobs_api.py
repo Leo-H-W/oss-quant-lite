@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from app.services.data_jobs.service import DataJobService
+from app.services.data_jobs.service import DataJobService, JobActiveError
 from app.services.wide_table_status import get_wide_table_status
 
 
@@ -77,10 +77,28 @@ def get_run(run_id: int):
     return jsonify({"success": True, "run": run.to_dict()})
 
 
+@data_jobs_bp.route("/<int:run_id>", methods=["DELETE"])
+def delete_run(run_id: int):
+    try:
+        get_data_job_service().delete_run(run_id)
+    except JobActiveError as exc:
+        # 任务仍在进行：拒绝删除，与"不存在"区分开
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    return jsonify({"success": True, "run_id": run_id})
+
+
 @data_jobs_bp.route("/<int:run_id>/retry", methods=["POST"])
 def retry_run(run_id: int):
     try:
         run = get_data_job_service().retry(run_id)
+    except JobActiveError as exc:
+        # 任务仍在进行：拒绝重试，与"不存在"区分开
+        return jsonify({"success": False, "error": str(exc)}), 400
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
     except Exception as exc:

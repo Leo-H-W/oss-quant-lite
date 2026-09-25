@@ -86,7 +86,9 @@ export default function MlModelsPage() {
           clearInterval(timer)
         }
       } catch {
+        // 轮询失败（多为 404）：训练任务存于内存，服务重启后任务随之丢失
         clearInterval(timer)
+        if (!stop) setTrainErr('训练任务已随服务重启丢失，请重新训练')
       }
     }, 1000)
     return () => {

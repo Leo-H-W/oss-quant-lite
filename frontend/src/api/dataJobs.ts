@@ -1,4 +1,4 @@
-import { extractApiError, rawGet, rawPost } from './client'
+import { extractApiError, rawDelete, rawGet, rawPost } from './client'
 
 // ================= 日频数据中心 /api/data-jobs（裸响应 {success,...}） =================
 export interface DataJobDef {
@@ -74,6 +74,28 @@ export const submitDataJob = async (jobType: string, params: Record<string, unkn
     )
   } catch (e) {
     throw new Error(extractApiError(e, '任务提交失败'))
+  }
+}
+
+// 重试走后端 /retry：按原 params_json 重新提交，不会像重新 submit 那样丢参数
+export const retryDataJob = async (runId: number) => {
+  try {
+    return await rawPost<{ success: boolean; run_id: number; status: string }>(
+      `/data-jobs/${runId}/retry`,
+      {},
+      120_000,
+    )
+  } catch (e) {
+    throw new Error(extractApiError(e, '任务重试失败'))
+  }
+}
+
+// 删除任务记录：仅终态任务可删（活跃任务后端返回 400）
+export const deleteDataJob = async (runId: number) => {
+  try {
+    return await rawDelete<{ success: boolean; run_id: number }>(`/data-jobs/${runId}`)
+  } catch (e) {
+    throw new Error(extractApiError(e, '任务删除失败'))
   }
 }
 

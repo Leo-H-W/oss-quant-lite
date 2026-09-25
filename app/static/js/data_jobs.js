@@ -100,6 +100,12 @@
                 const progress = typeof run.progress === "number" ? `${run.progress.toFixed(1)}%` : "-";
                 const progressMessage = run.progress_message || "-";
                 const sourceName = run.source_name || "-";
+                const retryCell = ["success", "failed", "cancelled"].includes(run.status)
+                    ? `<button type="button" class="btn btn-outline-secondary btn-sm" data-retry-run-id="${run.id}" title="按原参数重新执行；写入按交易日分区原子覆盖，不会产生重复数据">重试</button>`
+                    : "";
+                const deleteCell = ["success", "failed", "cancelled"].includes(run.status)
+                    ? `<button type="button" class="btn btn-outline-danger btn-sm" data-delete-run-id="${run.id}">删除</button>`
+                    : "";
                 return `<tr data-run-id="${run.id}">
                     <td>${run.id}</td>
                     <td>${run.job_type}</td>
@@ -108,6 +114,7 @@
                     <td>${sourceName}</td>
                     <td>${progressMessage}</td>
                     <td>${formatTime(run.finished_at || run.started_at || run.queued_at)}</td>
+                    <td>${retryCell}${deleteCell}</td>
                 </tr>`;
             })
             .join("");
@@ -124,6 +131,7 @@
                             <th>来源</th>
                             <th>进度消息</th>
                             <th>时间</th>
+                            <th>操作</th>
                         </tr>
                     </thead>
                     <tbody>${rows}</tbody>
@@ -141,6 +149,65 @@
                 }
             });
         });
+
+        container.querySelectorAll("[data-retry-run-id]").forEach((button) => {
+            button.addEventListener("click", function (event) {
+                event.stopPropagation();
+                const runId = Number(this.getAttribute("data-retry-run-id"));
+                if (!Number.isNaN(runId) && runId > 0) {
+                    retryRun(runId);
+                }
+            });
+        });
+
+        container.querySelectorAll("[data-delete-run-id]").forEach((button) => {
+            button.addEventListener("click", function (event) {
+                event.stopPropagation();
+                const runId = Number(this.getAttribute("data-delete-run-id"));
+                if (!Number.isNaN(runId) && runId > 0) {
+                    deleteRun(runId);
+                }
+            });
+        });
+    }
+
+    // 删除任务记录：仅终态任务可删（后端对活跃任务返回 400）
+    async function deleteRun(runId) {
+        if (!window.confirm(`确定删除任务 #${runId} 的记录吗？`)) return;
+        try {
+            const resp = await fetch(`/api/data-jobs/${runId}`, { method: "DELETE" });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                showDataJobResult(`删除失败: ${data.error || "未知错误"}`, "danger");
+                return;
+            }
+            showDataJobResult(`已删除任务记录 run_id=${runId}`, "success");
+            loadRunHistory();
+        } catch (error) {
+            console.error("删除任务失败:", error);
+            showDataJobResult("删除失败，请检查服务状态", "danger");
+        }
+    }
+
+    // 重试走 /retry API：后端按原 params_json 重新提交，不会丢日期参数
+    async function retryRun(runId) {
+        showDataJobResult(`正在重试 run_id=${runId} ...`, "info");
+        try {
+            const resp = await fetch(`/api/data-jobs/${runId}/retry`, { method: "POST" });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                showDataJobResult(`重试失败: ${data.error || "未知错误"}`, "danger");
+                return;
+            }
+            showDataJobResult(`已重试：新 run_id=${data.run_id}, status=${data.status}`, "success");
+            currentRunId = data.run_id;
+            await fetchRunStatus(currentRunId);
+            startPolling(currentRunId);
+            loadRunHistory();
+        } catch (error) {
+            console.error("重试任务失败:", error);
+            showDataJobResult("重试失败，请检查服务状态", "danger");
+        }
     }
 
     async function loadRunHistory() {
