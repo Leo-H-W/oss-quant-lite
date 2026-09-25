@@ -1,6 +1,14 @@
 from pathlib import Path
 
+import pytest
 
+
+def _requires_doc(path: str):
+    # docs/ 已移出版本控制（19cc15b5），本地无此文档时跳过
+    return pytest.mark.skipif(not Path(path).exists(), reason=f"{path} 不在版本控制中")
+
+
+@_requires_doc("docs/guides/多因子模型系统完整指南.md")
 def test_complete_guide_uses_prototype_positioning_and_real_start_command():
     guide = Path("docs/guides/多因子模型系统完整指南.md").read_text(encoding="utf-8")
 
@@ -13,6 +21,7 @@ def test_complete_guide_uses_prototype_positioning_and_real_start_command():
     assert "功能完整" not in guide
 
 
+@_requires_doc("docs/guides/多因子模型系统功能列表.md")
 def test_feature_list_guide_matches_current_remediation_scope():
     guide = Path("docs/guides/多因子模型系统功能列表.md").read_text(encoding="utf-8")
 
@@ -24,6 +33,7 @@ def test_feature_list_guide_matches_current_remediation_scope():
     assert "完整的量化投资解决方案" not in guide
 
 
+@_requires_doc("docs/guides/Text2SQL功能列表.md")
 def test_text2sql_guide_avoids_complete_platform_claims():
     guide = Path("docs/guides/Text2SQL功能列表.md").read_text(encoding="utf-8")
 

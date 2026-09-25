@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 
 def test_text2sql_page_uses_entry_positioning_copy():
     html = Path("app/templates/text2sql/index.html").read_text(encoding="utf-8")
@@ -9,6 +11,11 @@ def test_text2sql_page_uses_entry_positioning_copy():
     assert "智能查询助手" not in html
 
 
+# docs/ 已移出版本控制（19cc15b5），本地无此文档时跳过
+@pytest.mark.skipif(
+    not Path("docs/guides/Text2SQL功能列表.md").exists(),
+    reason="docs/guides/Text2SQL功能列表.md 不在版本控制中",
+)
 def test_text2sql_guide_uses_neutral_home_entry_name():
     guide = Path("docs/guides/Text2SQL功能列表.md").read_text(encoding="utf-8")
 

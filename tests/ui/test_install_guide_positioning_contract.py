@@ -1,5 +1,13 @@
 from pathlib import Path
 
+import pytest
+
+# docs/ 已移出版本控制（19cc15b5），本地无此文档时跳过
+pytestmark = pytest.mark.skipif(
+    not Path("docs/guides/INSTALL_GUIDE.md").exists(),
+    reason="docs/guides/INSTALL_GUIDE.md 不在版本控制中",
+)
+
 
 def test_install_guide_avoids_full_version_positioning():
     guide = Path("docs/guides/INSTALL_GUIDE.md").read_text(encoding="utf-8")

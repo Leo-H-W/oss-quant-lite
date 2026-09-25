@@ -1,6 +1,14 @@
 from pathlib import Path
 
+import pytest
 
+
+def _requires_doc(path: str):
+    # docs/ 已移出版本控制（19cc15b5），本地无此文档时跳过
+    return pytest.mark.skipif(not Path(path).exists(), reason=f"{path} 不在版本控制中")
+
+
+@_requires_doc("docs/guides/ENHANCED_FINANCIAL_FACTORS_README.md")
 def test_enhanced_financial_factors_guide_avoids_most_complete_claims():
     guide = Path("docs/guides/ENHANCED_FINANCIAL_FACTORS_README.md").read_text(encoding="utf-8")
 
@@ -11,6 +19,7 @@ def test_enhanced_financial_factors_guide_avoids_most_complete_claims():
     assert "完整字段" not in guide
 
 
+@_requires_doc("docs/guides/data_requirements_for_real_training.md")
 def test_real_training_data_guide_avoids_mock_target_recommendation_as_default():
     guide = Path("docs/guides/data_requirements_for_real_training.md").read_text(encoding="utf-8")
 

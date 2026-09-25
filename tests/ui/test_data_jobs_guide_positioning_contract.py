@@ -1,7 +1,14 @@
 from pathlib import Path
 import pytest
 
-pytestmark = pytest.mark.module_data_jobs
+pytestmark = [
+    pytest.mark.module_data_jobs,
+    # docs/ 已移出版本控制（19cc15b5），本地无此文档时跳过
+    pytest.mark.skipif(
+        not Path("docs/guides/data_jobs_user_guide.md").exists(),
+        reason="docs/guides/data_jobs_user_guide.md 不在版本控制中",
+    ),
+]
 
 
 def test_data_jobs_guide_uses_current_behavior_wording():
