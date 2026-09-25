@@ -22,6 +22,9 @@
 
 ### 数值软目标（2026-04-10 第二次实测，新增 10 个因子后，基于 test_factor_ic_ir.py 自动计算）
 
+> 注：test_factor_ic_ir.py 依赖已废弃的 factor_values 表（因子数据已迁 Parquet），
+> 该测试文件于 2026-09-25 删除；以下为 2026-04-10 历史实测记录。
+
 因子库已从 8 个扩展至 17 个，IC/IR 测量由 `pytest -m module_factor_engine` 自动运行。
 
 | 因子 | IC 均值 | IC_IR | n_dates | IC | IC_IR |
