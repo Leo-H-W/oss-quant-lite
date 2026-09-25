@@ -94,7 +94,7 @@ class Config:
             'base_url': os.getenv('LLM_BASE_URL', 'http://localhost:11434'),
             'model': os.getenv('LLM_MODEL', 'qwen2.5-coder:latest'),
             'timeout': 60,
-            'temperature': 0.1,
+            'temperature': float(os.getenv('LLM_TEMPERATURE', '0.1')),
             'max_tokens': 2048
         },
         'openai': {
@@ -102,7 +102,7 @@ class Config:
             'model': os.getenv('LLM_MODEL', 'gpt-3.5-turbo'),
             'base_url': os.getenv('LLM_BASE_URL', 'https://api.openai.com/v1'),
             'timeout': 60,
-            'temperature': 0.1,
+            'temperature': float(os.getenv('LLM_TEMPERATURE', '0.1')),
             'max_tokens': 2048
         }
     }

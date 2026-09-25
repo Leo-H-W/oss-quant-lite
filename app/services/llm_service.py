@@ -178,7 +178,8 @@ class LLMService:
                 }
             ]
             
-            result = self.chat_completion(messages, temperature=0.1)
+            # temperature 由 LLM_CONFIG / LLM_TEMPERATURE 决定（部分模型如 kimi-for-coding 仅允许 temperature=1）
+            result = self.chat_completion(messages)
             
             if result['success']:
                 return self._extract_sql_from_response(result['content'])
