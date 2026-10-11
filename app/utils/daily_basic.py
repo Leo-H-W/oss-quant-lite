@@ -1,3 +1,5 @@
+import os
+
 from db_utils import DatabaseUtils
 from parquet_job_helpers import DailyFetchJob
 
@@ -27,6 +29,10 @@ FIELDS = [
 class DailyBasicJob(DailyFetchJob):
     job_name = "daily_basic"
     rel_table = "daily_basic/daily"
+
+    # tushare 对 daily_basic 接口按账号积分限频（实测低档账号 1 次/分钟），
+    # 默认 0.12s 的间隔必然全部超限失败；可用 DAILY_BASIC_RATE_LIMIT 覆盖
+    rate_limit_seconds = float(os.getenv("DAILY_BASIC_RATE_LIMIT", "62"))
 
     def fetch_one(self, trade_date):
         return self.api.daily_basic(trade_date=trade_date, fields=FIELDS)

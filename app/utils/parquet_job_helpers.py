@@ -76,7 +76,15 @@ def resolve_trade_dates(default_latest_only: bool = True) -> Tuple[List[str], bo
         return [], full_refresh
 
     if not end_date:
-        end_date = available[-1]
+        # 交易日历含全年未来日期（当年 12-31），未显式指定时必须收敛到今天，
+        # 否则缺口回补会去拉未来日期，空耗配额且必失败
+        today = datetime.now().strftime("%Y%m%d")
+        end_date = min(available[-1], today)
+        # 今天非开市日（周末/节假日）时回退到最近的开市日，
+        # 否则缺省解析为空、缺口回补也不触发，周末/假日运行一无所获
+        eligible = [d for d in available if d <= end_date]
+        if eligible:
+            end_date = eligible[-1]
 
     if not start_date:
         start_date = end_date if default_latest_only else available[0]
