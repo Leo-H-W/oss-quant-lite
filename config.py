@@ -67,7 +67,13 @@ class Config:
     # 数据更新配置
     DATA_UPDATE_HOUR = int(os.getenv('DATA_UPDATE_HOUR', 18))  # 每日18点更新数据
     DATA_UPDATE_MINUTE = int(os.getenv('DATA_UPDATE_MINUTE', 0))
-    
+
+    # 夜间自动数据初始化：到点检查 Parquet 资产，缺失时按依赖序串行补齐
+    AUTO_INIT_ENABLED = os.getenv('AUTO_INIT_ENABLED', 'true').lower() == 'true'
+    AUTO_INIT_TIME = os.getenv('AUTO_INIT_TIME', '02:30')
+    # 启动时若资产缺失立即后台补跑（新部署不必干等半夜）；资产齐全时零动作
+    AUTO_INIT_ON_STARTUP = os.getenv('AUTO_INIT_ON_STARTUP', 'true').lower() == 'true'
+
     # 预警配置
     EMAIL_SMTP_SERVER = os.getenv('EMAIL_SMTP_SERVER', 'smtp.qq.com')
     EMAIL_SMTP_PORT = int(os.getenv('EMAIL_SMTP_PORT', 587))

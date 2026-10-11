@@ -51,6 +51,11 @@ if __name__ == '__main__':
     if is_debug:
         print("⚠️  以 DEBUG 模式运行开发服务器，请勿用于生产环境")
 
+    # 夜间自动数据初始化（后台线程，不阻塞服务启动）；
+    # 只挂在这里而不挂 create_app：数据任务线程会调 create_app，挂那里会繁殖调度线程
+    from app.services.data_jobs.auto_init import start_auto_init
+    start_auto_init(app)
+
     socketio.run(
         app,
         host='0.0.0.0',

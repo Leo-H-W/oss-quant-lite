@@ -175,6 +175,22 @@ class JobRegistry:
                     "moneyflow", "cyq_perf", "income_statement", "balance_sheet",
                 ],
             ),
+            # 仅供夜间自动初始化链路提交，不进 _visible_job_types：
+            # 页面可见任务列表保持 12 个不变，避免改变数据管理页 UI
+            "text2sql_wide_table": JobDefinition(
+                "text2sql_wide_table",
+                "衍生计算",
+                "scripts/build_text2sql_wide_tables.py",
+                display_name="Text2SQL 宽表物化",
+                description=(
+                    "从分区日线/每日指标物化 stock_business.parquet 与均线宽表，"
+                    "供 Text2SQL 引擎使用，是数据管理页初始化检查的最后一环。"
+                ),
+                recommended_order=12,
+                source_name="derived",
+                source_mode="derived",
+                dependencies=["daily_history_by_date", "daily_basic"],
+            ),
         }
 
     def get_job(self, job_type: str) -> JobDefinition:
