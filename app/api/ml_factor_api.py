@@ -1720,6 +1720,38 @@ def integrated_portfolio_selection():
         return jsonify({'error': str(e)}), 500
 
 
+@ml_factor_bp.route('/strategy/templates', methods=['GET'])
+def list_strategy_templates_api():
+    """列出内置回测策略模板（供前端回测表单预填）"""
+    try:
+        from app.services.strategy_templates import list_strategy_templates
+        return jsonify({
+            'success': True,
+            'templates': convert_numpy_types(list_strategy_templates()),
+        })
+    except Exception as e:
+        logger.error(f"获取策略模板列表失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@ml_factor_bp.route('/strategy/templates/<template_id>', methods=['GET'])
+def get_strategy_template_api(template_id):
+    """获取单个策略模板（含可直接回测的 strategy_config）"""
+    try:
+        from app.services.strategy_templates import get_strategy_template
+        template = get_strategy_template(template_id)
+        if template is None:
+            return jsonify({'error': f'策略模板不存在: {template_id}'}), 404
+        return jsonify({
+            'success': True,
+            'template_id': template_id,
+            'template': convert_numpy_types(template),
+        })
+    except Exception as e:
+        logger.error(f"获取策略模板失败: {template_id}, {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @ml_factor_bp.route('/backtest/run', methods=['POST'])
 def run_backtest():
     """运行回测

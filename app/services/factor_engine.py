@@ -55,6 +55,13 @@ class FactorEngine:
             'money_flow_strength': self._money_flow_strength_factor,
             'big_order_ratio': self._big_order_ratio_factor,
             'money_flow_momentum': self._money_flow_momentum_factor,
+
+            # 资金痕迹因子（跟踪主力资金动向）
+            'cmf_20d': self._cmf_factor,
+            'mfi_14d': self._mfi_factor,
+            'main_net_inflow_rate_5d': self._main_net_inflow_rate_factor,
+            'main_net_inflow_rate_20d': self._main_net_inflow_rate_factor,
+            'smart_money_q': self._smart_money_q_factor,
             
             # 筹码面因子
             'chip_concentration': self._chip_concentration_factor,
@@ -154,6 +161,41 @@ class FactorEngine:
                 ],
                 "calculation_rule": "((buy_lg_amount+buy_elg_amount)-(sell_lg_amount+sell_elg_amount)) / (buy_sm_amount+buy_md_amount+buy_lg_amount+buy_elg_amount)。",
                 "sample_expectation": "若大单净流入为 625、分母为 1000，则样例值应为 0.625。",
+            },
+            {
+                "factor_id": "cmf_20d",
+                "factor_name": "蔡金资金流向(20日)",
+                "required_fields": ["high", "low", "close", "vol"],
+                "calculation_rule": "乘子=((C-L)-(H-C))/(H-L)，CMF=Σ20日(乘子×vol)/Σ20日vol；一字板 H==L 按乘子 0 处理。",
+                "sample_expectation": "若连续20日收盘价均等于最高价，则 CMF=1；10日收最高+10日收最低且等量时为 0。",
+            },
+            {
+                "factor_id": "mfi_14d",
+                "factor_name": "资金流量指标(14日)",
+                "required_fields": ["high", "low", "close", "vol"],
+                "calculation_rule": "TP=(H+L+C)/3，RMF=TP×vol，按TP涨跌分正负资金流，MFI=100-100/(1+Σ14日正/Σ14日负)。",
+                "sample_expectation": "典型价连续上涨14日以上时 MFI=100；连续下跌时 MFI=0。",
+            },
+            {
+                "factor_id": "main_net_inflow_rate_5d",
+                "factor_name": "主力净流入率5日均值",
+                "required_fields": [
+                    "buy_sm_amount",
+                    "buy_md_amount",
+                    "buy_lg_amount",
+                    "buy_elg_amount",
+                    "sell_lg_amount",
+                    "sell_elg_amount",
+                ],
+                "calculation_rule": "日度主力净流入率（同 money_flow_strength）的 5 日滚动均值，口径对齐华泰《单因子测试之资金流向因子》。",
+                "sample_expectation": "若日度净流入率为 [0.1,0.2,0.3,0.4,0.5,0.6]，最后一个样例值应为 (0.2+0.3+0.4+0.5+0.6)/5=0.4。",
+            },
+            {
+                "factor_id": "smart_money_q",
+                "factor_name": "聪明钱Q",
+                "required_fields": ["minute_1min: close", "minute_1min: vol"],
+                "calculation_rule": "分钟级 S=|ret|/√vol 降序取前20%为聪明钱，Q=VWAP_smart/VWAP_all（开源证券口径）；本地无分钟数据时因子为空。",
+                "sample_expectation": "Q>1 表示聪明钱成交在高位（追涨），Q<1 表示低位吸筹。",
             },
         ]
 
@@ -257,6 +299,11 @@ class FactorEngine:
         'money_flow_strength': ['moneyflow'],
         'big_order_ratio': ['moneyflow'],
         'money_flow_momentum': ['moneyflow'],
+        'cmf_20d': ['ohlc_prices'],
+        'mfi_14d': ['ohlc_prices'],
+        'main_net_inflow_rate_5d': ['moneyflow'],
+        'main_net_inflow_rate_20d': ['moneyflow'],
+        'smart_money_q': ['minute_1min'],
         'chip_concentration': ['cyq'],
         'winner_rate_change': ['cyq'],
     }
@@ -270,6 +317,8 @@ class FactorEngine:
     # 数据源 → (reader 方法名, 是否需要一年预热窗, 是否按 ts_codes 全量读取)
     DATA_SOURCE_LOADERS = {
         'return_prices': ('get_return_prices', True, False),
+        # CMF/MFI 需要 OHLC 全价格列；复权口径与 return_prices 一致
+        'ohlc_prices': ('get_ohlc_prices', True, False),
         # daily_basic 供 pe/pb/ps_percentile 做 252 日滚动分位，必须带预热窗，
         # 否则单日截面下每股只有 1 个观测，因子恒为空
         'daily_basic': ('get_daily_basic', True, False),
@@ -277,6 +326,9 @@ class FactorEngine:
         'cyq': ('get_cyq_perf', True, False),
         'income': ('get_income_statement', False, True),
         'balance': ('get_balance_sheet', False, True),
+        # 分钟线不在 ParquetDataReader 上：签名是逐股 (ts_code, period_type, ...)
+        # 且数据通常只覆盖近期，预热窗无意义。走 _get_factor_data 特判分支。
+        'minute_1min': ('_load_minute_bars', False, False),
     }
 
     def _get_factor_data(self, factor_id: str, ts_codes: List[str],
@@ -302,7 +354,10 @@ class FactorEngine:
             method_name, needs_history, codes_only = self.DATA_SOURCE_LOADERS[source]
             window_start = extended_start if needs_history else start_date
             try:
-                if codes_only:
+                if source == 'minute_1min':
+                    # 分钟线走 MinuteParquetReader（逐股签名），挂在引擎自身
+                    loaded = self._load_minute_bars(ts_codes, window_start, end_date)
+                elif codes_only:
                     loaded = getattr(self.data_reader, method_name)(ts_codes)
                 else:
                     loaded = getattr(self.data_reader, method_name)(
@@ -707,6 +762,143 @@ class FactorEngine:
         )
         return self._finalize_factor_result(df, 'factor_value', factor_id)
 
+    # ==================== 资金痕迹因子 ====================
+
+    @staticmethod
+    def _window_from_factor_id(factor_id: str) -> int:
+        """从因子 id 解析窗口：cmf_20d → 20，main_net_inflow_rate_5d → 5"""
+        for token in reversed(factor_id.split('_')):
+            if token.endswith('d') and token[:-1].isdigit():
+                return int(token[:-1])
+        raise ValueError(f"因子 id 无法解析窗口: {factor_id}")
+
+    def _cmf_factor(self, data: Dict[str, pd.DataFrame], factor_id: str) -> pd.DataFrame:
+        """CMF 蔡金资金流向：Σ(N日) MFV / Σ(N日) vol。
+
+        MFV = ((C-L)-(H-C))/(H-L) × vol。一字板 H==L 时乘子按 0（中性）处理。
+        """
+        if 'ohlc_prices' not in data or data['ohlc_prices'].empty:
+            return pd.DataFrame()
+
+        period = self._window_from_factor_id(factor_id)
+        df = self._sorted_by_code_and_date(data['ohlc_prices'])
+        price_range = df['high'] - df['low']
+        multiplier = ((df['close'] - df['low']) - (df['high'] - df['close'])) / price_range.replace(0, np.nan)
+        df['mfv'] = multiplier.fillna(0.0) * df['vol']
+        mfv_sum = df.groupby('ts_code')['mfv'].transform(lambda s: s.rolling(period).sum())
+        vol_sum = df.groupby('ts_code')['vol'].transform(lambda s: s.rolling(period).sum())
+        df['factor_value'] = mfv_sum / vol_sum.replace(0, np.nan)
+        return self._finalize_factor_result(df, 'factor_value', factor_id)
+
+    def _mfi_factor(self, data: Dict[str, pd.DataFrame], factor_id: str) -> pd.DataFrame:
+        """MFI 资金流量指标：典型价资金流的 RSI 变体。
+
+        TP=(H+L+C)/3，RMF=TP×vol；按 TP 涨跌分正负资金流，
+        MFI = 100 - 100/(1 + Σ正/Σ负)。负资金流为 0 时 MFI=100。
+        """
+        if 'ohlc_prices' not in data or data['ohlc_prices'].empty:
+            return pd.DataFrame()
+
+        period = self._window_from_factor_id(factor_id)
+        df = self._sorted_by_code_and_date(data['ohlc_prices'])
+        df['tp'] = (df['high'] + df['low'] + df['close']) / 3
+        df['rmf'] = df['tp'] * df['vol']
+        direction = df.groupby('ts_code')['tp'].diff()
+        df['pos_mf'] = df['rmf'].where(direction > 0, 0.0)
+        df['neg_mf'] = df['rmf'].where(direction < 0, 0.0)
+        pos_sum = df.groupby('ts_code')['pos_mf'].transform(lambda s: s.rolling(period).sum())
+        neg_sum = df.groupby('ts_code')['neg_mf'].transform(lambda s: s.rolling(period).sum())
+        df['factor_value'] = 100 - 100 / (1 + pos_sum / neg_sum.replace(0, np.nan))
+        # 全窗口无负资金流（neg_sum=0 且 pos_sum>0）时 MFI 取 100
+        df.loc[(neg_sum == 0) & (pos_sum > 0), 'factor_value'] = 100.0
+        return self._finalize_factor_result(df, 'factor_value', factor_id)
+
+    def _main_net_inflow_rate_factor(self, data: Dict[str, pd.DataFrame], factor_id: str) -> pd.DataFrame:
+        """主力净流入率 N 日均值：大单+特大单净流入 / 总买入额的滚动均值。
+
+        日度口径与 money_flow_strength 一致，滚动平滑对齐
+        华泰证券《单因子测试之资金流向因子》(2018) 的主力净流入率因子。
+        """
+        if 'moneyflow' not in data or data['moneyflow'].empty:
+            return pd.DataFrame()
+
+        period = self._window_from_factor_id(factor_id)
+        df = self._sorted_by_code_and_date(data['moneyflow'])
+        big_net = (df['buy_lg_amount'] + df['buy_elg_amount']) \
+            - (df['sell_lg_amount'] + df['sell_elg_amount'])
+        total = (df['buy_sm_amount'] + df['buy_md_amount']
+                 + df['buy_lg_amount'] + df['buy_elg_amount'])
+        df['daily_rate'] = big_net / total
+        df['factor_value'] = df.groupby('ts_code')['daily_rate'].transform(
+            lambda s: s.rolling(period).mean()
+        )
+        return self._finalize_factor_result(df, 'factor_value', factor_id)
+
+    def _load_minute_bars(self, ts_codes: List[str], start_date: str, end_date: str) -> pd.DataFrame:
+        """逐股读取 1 分钟 bar（MinuteParquetReader 是单票签名）。
+
+        分钟数据通常只覆盖近期（realtime 同步产物），本地缺失时返回空表，
+        由因子函数降级为空结果。
+        """
+        from app.services.minute_parquet_reader import MinuteParquetReader
+
+        reader = MinuteParquetReader()
+        frames = []
+        for ts_code in ts_codes:
+            try:
+                df = reader.get_data(
+                    ts_code=ts_code, period_type='1min',
+                    start_time=start_date, end_time=end_date,
+                )
+            except Exception as e:
+                logger.warning(f"读取分钟数据失败 {ts_code}: {e}")
+                continue
+            if not df.empty:
+                frames.append(df)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def _smart_money_q_factor(self, data: Dict[str, pd.DataFrame], factor_id: str) -> pd.DataFrame:
+        """聪明钱因子（开源证券）：Q = VWAP_smart / VWAP_all，逐日取值。
+
+        每分钟 bar 的"聪明度" S = |ret| / sqrt(vol)，按 S 降序取前 20%
+        为聪明钱交易，比较其 VWAP 与全天 VWAP：Q 大说明聪明钱买在高位
+        （情绪推动），Q 小说明聪明钱低位吸筹。
+        """
+        if 'minute_1min' not in data or data['minute_1min'].empty:
+            return pd.DataFrame()
+
+        df = data['minute_1min'].copy()
+        df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+        df = df.dropna(subset=['datetime'])
+        for col in ('close', 'vol'):
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df[(df['close'] > 0) & (df['vol'] > 0)]
+        if df.empty:
+            return pd.DataFrame()
+        if 'amount' in df.columns:
+            df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+            df['amount'] = df['amount'].where(df['amount'] > 0, df['close'] * df['vol'])
+        else:
+            df['amount'] = df['close'] * df['vol']
+        df['trade_date'] = df['datetime'].dt.normalize()
+        df = df.sort_values(['ts_code', 'datetime'])
+
+        def _daily_q(g: pd.DataFrame) -> float:
+            ret = g['close'].pct_change()
+            s = ret.abs() / np.sqrt(g['vol'])
+            n_smart = max(1, int(len(g) * 0.2))
+            smart_idx = s.sort_values(ascending=False).index[:n_smart]
+            vwap_all = g['amount'].sum() / g['vol'].sum()
+            vwap_smart = g.loc[smart_idx, 'amount'].sum() / g.loc[smart_idx, 'vol'].sum()
+            return vwap_smart / vwap_all
+
+        q_series = df.groupby(['ts_code', 'trade_date']).apply(_daily_q)
+        result = q_series.reset_index(name='factor_value')
+        return self._finalize_factor_result(result, 'factor_value', factor_id)
+
+
     def _chip_concentration_factor(self, data: Dict[str, pd.DataFrame], factor_id: str) -> pd.DataFrame:
         """筹码集中度因子：90%筹码价格区间相对中位数的比例"""
         if 'cyq' not in data or data['cyq'].empty:
@@ -947,13 +1139,14 @@ class FactorEngine:
             
             # 添加内置因子
             for factor_id, func in self.builtin_factors.items():
-                # 根据因子ID推断因子类型
-                if any(x in factor_id for x in ['momentum', 'volatility', 'volume', 'price', 'ma']):
+                # 根据因子ID推断因子类型。money_flow 必须先于 technical 判断：
+                # 'main_net_inflow_rate_5d' 这类 id 含子串 'ma'，会先误判成均线类
+                if any(x in factor_id for x in ['money', 'flow', 'cmf', 'mfi', 'inflow', 'smart']):
+                    ftype = 'money_flow'
+                elif any(x in factor_id for x in ['momentum', 'volatility', 'volume', 'price', 'ma']):
                     ftype = 'technical'
                 elif any(x in factor_id for x in ['pe', 'pb', 'ps', 'roe', 'roa', 'revenue', 'profit']):
                     ftype = 'fundamental'
-                elif any(x in factor_id for x in ['money', 'flow']):
-                    ftype = 'money_flow'
                 elif any(x in factor_id for x in ['chip', 'winner']):
                     ftype = 'chip'
                 else:

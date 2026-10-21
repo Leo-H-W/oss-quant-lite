@@ -192,6 +192,24 @@ class ParquetDataReader:
         result = pd.concat([selected, fallback], ignore_index=True)
         return result
 
+    def get_ohlc_prices(
+        self,
+        ts_codes: Optional[List[str]] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """读取复权口径的 OHLC 全价格列（供 CMF/MFI 等量价因子使用）。
+
+        与 get_return_prices 同一复权口径，只是 price_fields 固定为
+        open/high/low/close，避免因子各自传参导致口径漂移。
+        """
+        return self.get_return_prices(
+            ts_codes=ts_codes,
+            start_date=start_date,
+            end_date=end_date,
+            price_fields=["open", "high", "low", "close"],
+        )
+
     def get_moneyflow(
         self,
         ts_codes: Optional[List[str]] = None,

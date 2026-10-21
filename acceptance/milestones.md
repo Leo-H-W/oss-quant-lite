@@ -112,3 +112,20 @@
 - [x] admin 新建用户（初始 123456 + 强制改密）、重置他人密码为 123456
 - [x] 忘记密码：SMTP 未配置时重置链接打印到服务端日志（logs/stock_analysis.log），链接可完成重置且一次性失效
 
+
+---
+
+## 资金痕迹因子与策略模板（2026-10-21）
+
+**覆盖模块：** factor_engine、backtest
+
+### 结构性门禁
+- [x] `pytest -m module_factor_engine` 全绿（含新增 tests/services/test_money_trace_factors.py 13 个合约测试）
+- [x] `pytest -m module_backtest` 全绿（含新增策略模板合约 4 个 + API 合约 3 个）
+
+### 交付内容
+- 新增内置因子：cmf_20d、mfi_14d、main_net_inflow_rate_5d/20d、smart_money_q（分钟数据缺失时优雅降级为空）
+- 新增策略模板 money_trace_tracking（/api/ml-factor/strategy/templates）
+
+### 数值软目标
+- N/A（因子 IC/分层回测数值目标在 M2 里程碑 review 统一确认；主力净流入率因子依赖 tushare moneyflow 数据下载后生效）

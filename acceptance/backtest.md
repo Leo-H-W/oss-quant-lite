@@ -17,6 +17,8 @@
 | 回测交易规则守卫 | tests/services/test_backtest_engine_rules.py | module_backtest |
 | 单股回测引擎合约 | tests/services/test_single_stock_backtest.py | module_backtest |
 | 孤儿 run 注册表判活 | tests/services/test_quality_fix_contracts.py | module_backtest |
+| 资金痕迹策略模板合约 | tests/services/test_money_trace_strategy_template.py | module_backtest |
+| 策略模板 API 合约 | tests/api/test_strategy_templates_api.py | module_backtest |
 
 ## 数值软目标（M4 里程碑 review 时人工确认）
 - 样本内 Sharpe > 0.8（单因子策略，2年回测）
