@@ -39,9 +39,17 @@ ASSET_JOB_CHAIN: Tuple[Tuple[str, str], ...] = (
 # 日频表 → 断档回补作业。资产级检查只看"存在且非空"，发现不了
 # "分区在 10-09 之后再没更新"这类日期断档；这里按交易日历比对最新分区，
 # 断档则提交对应日更作业（作业自带 gap-fill，按交易日历差集回补）。
+# daily_basic/stk_factor/moneyflow/cyq_perf 走 Baostock/通达信/本地复算通道，
+# 绕开 tushare 高积分与 60 次/小时限频；顺序即依赖序
+# （cyq_perf 复算依赖 daily_basic 换手率，必须排在最后）。
+# 注意：断档感知要求分区目录已存在（缺目录属资产检查职责，而这四张表
+# 不在 PARQUET_ASSETS 内），首次启用需手动跑过一次建目录。
 DAILY_GAP_JOB_CHAIN: Tuple[Tuple[str, str], ...] = (
     ("daily_history/daily", "daily_history_by_date"),
-    ("daily_basic/daily", "daily_basic"),
+    ("daily_basic/daily", "daily_basic_baostock"),
+    ("stk_factor/daily", "adj_factor_baostock"),
+    ("moneyflow/daily", "moneyflow_tdx"),
+    ("cyq_perf/daily", "cyq_perf_compute"),
 )
 
 # 盘后数据就绪时间（与 wide_table_status.CUTOFF_HOUR 同口径）：

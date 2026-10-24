@@ -191,6 +191,62 @@ class JobRegistry:
                 source_mode="derived",
                 dependencies=["daily_history_by_date", "daily_basic"],
             ),
+            # 绕开 tushare 高积分/限频的替代生产者（隐藏任务，夜间断档链使用）：
+            "daily_basic_baostock": JobDefinition(
+                "daily_basic_baostock",
+                "日频行情与基本面",
+                "app/utils/daily_basic_baostock.py",
+                display_name="日线基本指标（Baostock 源）",
+                description=(
+                    "Baostock K线扩展字段（turn/peTTM/pbMRQ/psTTM）写入 daily_basic 同一张表；"
+                    "tushare 版 60 次/小时限频的替代通道，股本市值等 tushare 独有列保持缺失。"
+                ),
+                dependencies=["stock_basic"],
+                source_name="baostock",
+                source_mode="incremental",
+                supports_incremental=True,
+            ),
+            "adj_factor_baostock": JobDefinition(
+                "adj_factor_baostock",
+                "资金流与扩展因子",
+                "app/utils/adj_factor_baostock.py",
+                display_name="复权因子（Baostock 源）",
+                description=(
+                    "Baostock 除权因子 + 本地日线重建 close_hfq/close_qfq，"
+                    "写入 stk_factor 同一张表（技术指标列由本地兜底计算，不在此生成）。"
+                ),
+                dependencies=["daily_history_by_date"],
+                source_name="baostock",
+                source_mode="incremental",
+                supports_incremental=True,
+            ),
+            "cyq_perf_compute": JobDefinition(
+                "cyq_perf_compute",
+                "资金流与扩展因子",
+                "app/utils/cyq_perf_compute.py",
+                display_name="筹码分布（本地复算）",
+                description=(
+                    "成本分布衰减模型：日线 OHLCV + daily_basic 换手率本地复算筹码分位/"
+                    "加权成本/获利比例，写入 cyq_perf 同一张表（tushare 5000 积分的替代）。"
+                ),
+                dependencies=["daily_history_by_date", "daily_basic_baostock"],
+                source_name="derived",
+                source_mode="derived",
+            ),
+            "moneyflow_tdx": JobDefinition(
+                "moneyflow_tdx",
+                "资金流与扩展因子",
+                "app/utils/moneyflow_tdx.py",
+                display_name="资金流向（通达信分笔）",
+                description=(
+                    "通达信免费协议拉分笔成交按金额分档聚合，写入 moneyflow 同一张表；"
+                    "分笔历史仅近期可拉，只能逐日向前积累，不可回补历史。"
+                ),
+                dependencies=["stock_basic"],
+                source_name="tdx",
+                source_mode="incremental",
+                supports_incremental=True,
+            ),
         }
 
     def get_job(self, job_type: str) -> JobDefinition:

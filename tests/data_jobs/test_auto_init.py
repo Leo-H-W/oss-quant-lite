@@ -332,9 +332,16 @@ def test_find_stale_daily_tables_skips_missing_dir(tmp_path):
 def test_plan_gap_fill_jobs_maps_stale_tables_in_chain_order():
     assert plan_gap_fill_jobs(["daily_basic/daily", "daily_history/daily"]) == [
         "daily_history_by_date",
-        "daily_basic",
+        "daily_basic_baostock",
     ]
     assert plan_gap_fill_jobs([]) == []
+
+
+def test_plan_gap_fill_jobs_covers_alternative_producers():
+    """四张 tushare 高积分/限频表全部映射到替代生产者。"""
+    assert plan_gap_fill_jobs([
+        "stk_factor/daily", "moneyflow/daily", "cyq_perf/daily",
+    ]) == ["adj_factor_baostock", "moneyflow_tdx", "cyq_perf_compute"]
 
 
 def test_run_auto_init_gap_fill_runs_when_assets_healthy():
