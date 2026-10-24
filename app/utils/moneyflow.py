@@ -1,3 +1,5 @@
+import os
+
 from db_utils import DatabaseUtils
 from parquet_job_helpers import DailyFetchJob
 
@@ -28,6 +30,9 @@ FIELDS = [
 
 class MoneyflowJob(DailyFetchJob):
     job_name = "moneyflow"
+
+    # tushare moneyflow 接口限频 50 次/分钟，1.5s/次留安全余量
+    rate_limit_seconds = float(os.getenv("MONEYFLOW_RATE_LIMIT", "1.5"))
     rel_table = "moneyflow/daily"
 
     def fetch_one(self, trade_date):

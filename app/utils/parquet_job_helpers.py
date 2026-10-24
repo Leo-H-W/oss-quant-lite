@@ -211,6 +211,8 @@ class DailyFetchJob:
     rate_limit_seconds: float = 0.12
     #: 单日拉取的最大尝试次数（指数退避）
     max_retries: int = 3
+    #: 限频错误单独计次：窗口性失败值得等满一个配额周期（小时级约 60 分钟）
+    rate_limit_max_retries: int = 12
 
     def __init__(self, api=None):
         self.api = api
@@ -221,7 +223,9 @@ class DailyFetchJob:
 
     def _fetch_with_retry(self, trade_date: str) -> Optional[pd.DataFrame]:
         last_error: Optional[Exception] = None
-        for attempt in range(1, self.max_retries + 1):
+        attempts = 0
+        rl_attempts = 0
+        while True:
             try:
                 df = self.fetch_one(trade_date)
                 if self.rate_limit_seconds > 0:
@@ -229,14 +233,29 @@ class DailyFetchJob:
                 return df
             except Exception as exc:  # noqa: BLE001 - 网络/权限异常统一退避重试
                 last_error = exc
-                if attempt >= self.max_retries:
-                    break
-                backoff = max(self.rate_limit_seconds, 0.5) * (2 ** (attempt - 1))
+                err_text = str(exc)
+                # 权限错误（接口未开通）重试无意义，直接放弃该日期
+                if "没有接口" in err_text and "权限" in err_text:
+                    logger.error(f"[{self.job_name}] {trade_date} 无接口权限，跳过重试: {exc}")
+                    return None
+                # 限频错误按窗口退避：秒级退避在窗口内重试必然再次超限。
+                # 小时级配额（如 daily_basic 60 次/小时）给 5 分钟退避，
+                # 分钟级给 65 秒；限频不占用常规重试次数。
+                if "频率超限" in err_text:
+                    rl_attempts += 1
+                    if rl_attempts > self.rate_limit_max_retries:
+                        break
+                    backoff = 300.0 if "次/小时" in err_text else 65.0
+                else:
+                    attempts += 1
+                    if attempts >= self.max_retries:
+                        break
+                    backoff = max(self.rate_limit_seconds, 0.5) * (2 ** (attempts - 1))
                 logger.warning(
-                    f"[{self.job_name}] {trade_date} 第 {attempt} 次拉取失败: {exc}，{backoff:.1f}s 后重试"
+                    f"[{self.job_name}] {trade_date} 拉取失败: {exc}，{backoff:.1f}s 后重试"
                 )
                 time.sleep(backoff)
-        logger.error(f"[{self.job_name}] {trade_date} 重试 {self.max_retries} 次仍失败: {last_error}")
+        logger.error(f"[{self.job_name}] {trade_date} 重试后仍失败: {last_error}")
         return None
 
     def run(self) -> int:

@@ -1,3 +1,5 @@
+import os
+
 from db_utils import DatabaseUtils
 from parquet_job_helpers import DailyFetchJob
 
@@ -44,6 +46,9 @@ FIELDS = [
 class StkFactorJob(DailyFetchJob):
     job_name = "stk_factor"
     rel_table = "stk_factor/daily"
+
+    # tushare stk_factor 为高积分接口，保守按 1.5s/次限速，超限再调
+    rate_limit_seconds = float(os.getenv("STK_FACTOR_RATE_LIMIT", "1.5"))
 
     def fetch_one(self, trade_date):
         return self.api.stk_factor(trade_date=trade_date, fields=FIELDS)
