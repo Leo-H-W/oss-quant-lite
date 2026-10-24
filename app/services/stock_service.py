@@ -93,6 +93,26 @@ class StockService:
             raise
 
     @staticmethod
+    @cached(expire=300, key_prefix='stock_suggest')
+    def suggest_stocks(query: str, limit: int = 10):
+        """搜索框联想：代码前缀优先，其次代码/名称模糊匹配。"""
+        df = _data_reader.get_stock_basic()
+        if df.empty:
+            return []
+        q = (query or "").strip()
+        if not q:
+            return []
+        q_lower = q.lower()
+        cols = ["ts_code", "symbol", "name"]
+        symbol_prefix = df[df["symbol"].str.startswith(q, na=False)]
+        other_mask = (
+            df["ts_code"].str.contains(q_lower, case=False, na=False)
+            | df["name"].str.contains(q, case=False, na=False)
+        ) & ~df.index.isin(symbol_prefix.index)
+        combined = pd.concat([symbol_prefix, df[other_mask]]).head(limit)
+        return combined[cols].where(combined[cols].notna(), None).to_dict(orient="records")
+
+    @staticmethod
     @cached(expire=600, key_prefix='stock_info')
     def get_stock_info(ts_code: str):
         """获取股票基本信息"""
@@ -116,9 +136,22 @@ class StockService:
     def get_daily_history(ts_code: str, start_date: str = None, end_date: str = None, limit: int = 60):
         """获取股票日线历史数据"""
         try:
+            # 未指定 start_date 时按 limit 推导下界：日线分区按天存储，
+            # 无下界会全表扫描 2000+ 个分区文件，单次请求耗时可达分钟级。
+            # limit*3 个自然日必定覆盖 limit 个交易日（含节假日余量）。
+            request_start_was_derived = start_date is None and bool(limit)
+            if request_start_was_derived:
+                start_date = (
+                    pd.Timestamp.now().normalize() - pd.Timedelta(days=limit * 3)
+                ).strftime("%Y-%m-%d")
             df = _data_reader.get_daily(
                 ts_codes=[ts_code], start_date=start_date, end_date=end_date
             )
+            if df.empty and start_date and request_start_was_derived:
+                # 推导下界查不到（如退市股最后交易日在窗口外），退回全量扫描
+                df = _data_reader.get_daily(
+                    ts_codes=[ts_code], start_date=None, end_date=end_date
+                )
             if df.empty:
                 return []
 

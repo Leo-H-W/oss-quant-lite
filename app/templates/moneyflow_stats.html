@@ -249,8 +249,7 @@
                     <table class="table moneyflow-table">
                         <thead>
                             <tr>
-                                <th>代码</th>
-                                <th>名称</th>
+                                <th>代码(名称)</th>
                                 <th>行业</th>
                                 <th class="text-end">净流入(万)</th>
                                 <th class="text-end">大单净额(万)</th>
@@ -260,8 +259,7 @@
                         <tbody>
                             {% for row in top_inflow %}
                             <tr>
-                                <td>{{ row.ts_code }}</td>
-                                <td>{{ row.name }}</td>
+                                <td>{{ row.ts_code }}{% if row.name %} ({{ row.name }}){% endif %}</td>
                                 <td><span class="industry-badge">{{ row.industry }}</span></td>
                                 <td class="text-end up">{{ '%.2f'|format(row.net_mf_amount) }}</td>
                                 <td class="text-end {% if row.lg_net_amount >= 0 %}up{% else %}down{% endif %}">
@@ -290,8 +288,7 @@
                     <table class="table moneyflow-table">
                         <thead>
                             <tr>
-                                <th>代码</th>
-                                <th>名称</th>
+                                <th>代码(名称)</th>
                                 <th>行业</th>
                                 <th class="text-end">净流入(万)</th>
                                 <th class="text-end">大单净额(万)</th>
@@ -301,8 +298,7 @@
                         <tbody>
                             {% for row in bottom_outflow %}
                             <tr>
-                                <td>{{ row.ts_code }}</td>
-                                <td>{{ row.name }}</td>
+                                <td>{{ row.ts_code }}{% if row.name %} ({{ row.name }}){% endif %}</td>
                                 <td><span class="industry-badge">{{ row.industry }}</span></td>
                                 <td class="text-end down">{{ '%.2f'|format(row.net_mf_amount) }}</td>
                                 <td class="text-end {% if row.lg_net_amount >= 0 %}up{% else %}down{% endif %}">

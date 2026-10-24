@@ -278,8 +278,7 @@ function renderTable(rows) {
     };
     let html = `<table class="result-table">
       <thead><tr>
-        <th onclick="sortTable('ts_code')">代码 ${sortIcon('ts_code')}</th>
-        <th>名称</th>
+        <th onclick="sortTable('ts_code')">代码(名称) ${sortIcon('ts_code')}</th>
         <th>行业</th>
         <th onclick="sortTable('pct_chg')">涨跌幅 ${sortIcon('pct_chg')}</th>
         <th onclick="sortTable('close')">现价 ${sortIcon('close')}</th>
@@ -292,8 +291,7 @@ function renderTable(rows) {
         const pctClass = r.pct_chg > 0 ? 'pct-up' : (r.pct_chg < 0 ? 'pct-down' : 'pct-flat');
         const pctStr = r.pct_chg > 0 ? '+' + r.pct_chg.toFixed(2) : r.pct_chg.toFixed(2);
         html += `<tr>
-          <td>${r.ts_code || ''}</td>
-          <td>${r.name || ''}</td>
+          <td>${r.ts_code || ''}${r.name ? ' (' + r.name + ')' : ''}</td>
           <td>${r.industry || '--'}</td>
           <td class="${pctClass}">${pctStr}%</td>
           <td>${fmtNum(r.close, 2)}</td>

@@ -153,7 +153,7 @@ async function loadStockOptions() {
             response.data.stocks.forEach(stock => {
                 const option = document.createElement('option');
                 option.value = stock.ts_code;
-                option.textContent = `${stock.symbol} - ${stock.name}`;
+                option.textContent = `${stock.symbol} (${stock.name})`;
                 select.appendChild(option);
             });
             console.log('股票选项加载完成');

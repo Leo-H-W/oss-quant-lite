@@ -30,9 +30,9 @@
                                 <option value="">全部地域</option>
                             </select>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-4 position-relative">
                             <label for="search-input" class="form-label">搜索</label>
-                            <input type="text" class="form-control" id="search-input" placeholder="股票代码或名称">
+                            <input type="text" class="form-control" id="search-input" placeholder="股票代码或名称" autocomplete="off">
                         </div>
                         <div class="col-12">
                             <button type="submit" class="btn btn-primary">筛选</button>
@@ -71,6 +71,7 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{{ url_for('static', filename='js/stock_suggest.js') }}"></script>
 <script>
 let currentPage = 1;
 let currentFilters = {};
@@ -80,10 +81,16 @@ document.addEventListener('DOMContentLoaded', function() {
     loadIndustries();
     loadAreas();
     loadStocks();
-    
+
     // 绑定事件
     document.getElementById('filter-form').addEventListener('submit', handleFilter);
     document.getElementById('reset-btn').addEventListener('click', resetFilters);
+
+    // 搜索联想：选中后回填 "代码 (名称)"
+    const searchInput = document.getElementById('search-input');
+    attachStockSuggest(searchInput, {
+        onSelect: item => { searchInput.value = `${item.symbol} (${item.name})`; }
+    });
 });
 
 // 加载行业列表
@@ -160,8 +167,7 @@ function renderStocks(stocks) {
             <table class="table table-hover">
                 <thead>
                     <tr>
-                        <th>股票代码</th>
-                        <th>股票名称</th>
+                        <th>股票代码(名称)</th>
                         <th>行业</th>
                         <th>地域</th>
                         <th>上市日期</th>
@@ -171,8 +177,7 @@ function renderStocks(stocks) {
                 <tbody>
                     ${stocks.map(stock => `
                         <tr>
-                            <td><code>${stock.symbol}</code></td>
-                            <td><strong>${stock.name}</strong></td>
+                            <td><code>${stock.symbol}</code> (${stock.name})</td>
                             <td><span class="badge bg-secondary">${stock.industry || '--'}</span></td>
                             <td>${stock.area || '--'}</td>
                             <td>${stock.list_date || '--'}</td>
@@ -238,11 +243,15 @@ function handleFilter(event) {
     
     const industry = document.getElementById('industry-select').value;
     const area = document.getElementById('area-select').value;
-    const search = document.getElementById('search-input').value;
-    
+    const search = document.getElementById('search-input').value.trim();
+
     if (industry) currentFilters.industry = industry;
     if (area) currentFilters.area = area;
-    if (search) currentFilters.search = search;
+    if (search) {
+        // 联想选中后为 "代码 (名称)" 格式，提交时提取纯代码
+        const m = search.match(/^(\S+)\s*\(/);
+        currentFilters.search = m ? m[1] : search;
+    }
     
     loadStocks(1);
 }

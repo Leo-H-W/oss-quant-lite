@@ -245,8 +245,7 @@
                         <table class="table brief-table">
                             <thead>
                                 <tr>
-                                    <th>代码</th>
-                                    <th>名称</th>
+                                    <th>代码(名称)</th>
                                     <th>行业</th>
                                     <th class="text-end">成交额(万)</th>
                                     <th class="text-end">涨跌幅</th>
@@ -256,8 +255,7 @@
                             <tbody>
                                 {% for row in top_amount %}
                                 <tr>
-                                    <td>{{ row.ts_code }}</td>
-                                    <td>{{ row.name }}</td>
+                                    <td>{{ row.ts_code }}{% if row.name %} ({{ row.name }}){% endif %}</td>
                                     <td>{{ row.industry }}</td>
                                     <td class="text-end">{{ '%.2f'|format(row.amount) }}</td>
                                     <td class="text-end {% if row.pct_chg >= 0 %}up{% else %}down{% endif %}">

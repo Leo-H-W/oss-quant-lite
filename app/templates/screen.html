@@ -588,8 +588,7 @@ function renderScreenResults(stocks, criteria) {
             <table class="table table-hover table-sm">
                 <thead class="table-light">
                     <tr>
-                        <th>股票代码</th>
-                        <th>股票名称</th>
+                        <th>股票代码(名称)</th>
                         <th>行业</th>
                         <th>地域</th>
                         <th>收盘价</th>
@@ -606,8 +605,7 @@ function renderScreenResults(stocks, criteria) {
                 <tbody>
                     ${stocks.map(stock => `
                         <tr>
-                            <td><code>${stock.symbol || stock.ts_code}</code></td>
-                            <td><strong>${stock.stock_name || stock.name}</strong></td>
+                            <td><code>${stock.symbol || stock.ts_code}</code> (${stock.stock_name || stock.name || '--'})</td>
                             <td><span class="badge bg-secondary">${stock.industry || '--'}</span></td>
                             <td>${stock.area || '--'}</td>
                             <td class="text-end">${stock.daily_close ? formatNumber(stock.daily_close, 2) : '--'}</td>

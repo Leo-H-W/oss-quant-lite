@@ -169,7 +169,7 @@
                     <form method="get" action="{{ url_for('main.stock_radar') }}">
                         <div class="mb-3">
                             <label class="form-label">股票代码</label>
-                            <input type="text" class="form-control code-input" name="ts_codes" value="{{ input_codes_text }}" placeholder="例如：000001.SZ,000002.SZ,300750.SZ">
+                            <input type="text" class="form-control code-input" name="ts_codes" value="{{ input_codes_text }}" placeholder="输入代码或名称可联想，例如：000001,000002,300750">
                         </div>
                         <div class="form-help mb-3">
                             当前对比口径为最新交易日数据，维度采用 Min-Max 标准化，估值指标已做反向处理。
@@ -209,8 +209,7 @@
                 <table class="table radar-table">
                     <thead>
                         <tr>
-                            <th>代码</th>
-                            <th>名称</th>
+                            <th>代码(名称)</th>
                             <th>行业</th>
                             <th class="text-end">估值</th>
                             <th class="text-end">成长</th>
@@ -230,8 +229,7 @@
                     <tbody>
                         {% for row in stock_rows %}
                         <tr>
-                            <td>{{ row.ts_code }}</td>
-                            <td>{{ row.name }}</td>
+                            <td>{{ row.ts_code }}{% if row.name %} ({{ row.name }}){% endif %}</td>
                             <td>{{ row.industry }}</td>
                             <td class="text-end"><span class="score-pill">{{ '%.2f'|format(row.valuation_score or 0) }}</span></td>
                             <td class="text-end"><span class="score-pill">{{ '%.2f'|format(row.growth_score or 0) }}</span></td>
@@ -257,6 +255,21 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{{ url_for('static', filename='js/stock_suggest.js') }}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 多代码输入：检索最后一个逗号分隔段，选中后替换该段为 6 位代码（服务端自动补后缀）
+    const input = document.querySelector('input[name="ts_codes"]');
+    attachStockSuggest(input, {
+        getQuery: v => v.split(',').pop().trim(),
+        onSelect: item => {
+            const parts = input.value.split(',');
+            parts[parts.length - 1] = item.symbol;
+            input.value = parts.map(s => s.trim()).filter(Boolean).join(',');
+        }
+    });
+});
+</script>
 <script>
 (function() {
     var chartEl = document.getElementById('radarChart');

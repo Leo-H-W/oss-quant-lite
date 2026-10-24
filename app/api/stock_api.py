@@ -36,6 +36,32 @@ def get_stocks():
             'data': None
         }), 500
 
+@api_bp.route('/stocks/suggest', methods=['GET'])
+def suggest_stocks():
+    """搜索框联想：返回 [{ts_code, symbol, name}]，代码前缀优先"""
+    try:
+        query = request.args.get('q', '')
+        limit = min(int(request.args.get('limit', 10)), 20)
+        result = StockService.suggest_stocks(query, limit)
+        return jsonify({
+            'code': 200,
+            'message': '成功',
+            'data': result
+        })
+    except ValueError:
+        return jsonify({
+            'code': 400,
+            'message': 'limit 须为整数',
+            'data': None
+        }), 400
+    except Exception as e:
+        logger.error(f"股票联想API错误: {e}")
+        return jsonify({
+            'code': 500,
+            'message': f'服务器错误: {str(e)}',
+            'data': None
+        }), 500
+
 @api_bp.route('/stocks/<ts_code>', methods=['GET'])
 def get_stock_detail(ts_code):
     """获取股票基本信息"""

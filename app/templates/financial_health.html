@@ -293,8 +293,7 @@
                     <thead>
                         <tr>
                             <th>排名</th>
-                            <th>代码</th>
-                            <th>名称</th>
+                            <th>代码(名称)</th>
                             <th>行业</th>
                             <th class="text-end">总分</th>
                             <th class="text-end">毛利率</th>
@@ -308,8 +307,7 @@
                         {% for row in scored_rows %}
                         <tr>
                             <td>{{ loop.index }}</td>
-                            <td>{{ row.ts_code }}</td>
-                            <td>{{ row.name }}</td>
+                            <td>{{ row.ts_code }}{% if row.name %} ({{ row.name }}){% endif %}</td>
                             <td>{{ row.industry }}</td>
                             <td class="text-end">
                                 <span class="score-badge score-{{ row.health_score }}">{{ row.health_score }}</span>

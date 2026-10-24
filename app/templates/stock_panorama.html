@@ -227,7 +227,7 @@
                     <form method="get" action="{{ url_for('main.stock_panorama') }}">
                         <div class="mb-3">
                             <label class="form-label">股票代码</label>
-                            <input type="text" class="form-control" name="ts_code" value="{{ input_code }}" placeholder="例如：000001.SZ">
+                            <input type="text" class="form-control" name="ts_code" value="{{ input_code }}" placeholder="输入代码或名称，例如：000001 或 平安银行">
                         </div>
                         <button class="btn btn-primary w-100" type="submit">
                             <i class="fas fa-binoculars me-1"></i>查看全景
@@ -424,6 +424,16 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{{ url_for('static', filename='js/stock_suggest.js') }}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 股票代码联想，选中回填 6 位代码（服务端自动补后缀）
+    const input = document.querySelector('input[name="ts_code"]');
+    attachStockSuggest(input, {
+        onSelect: item => { input.value = item.symbol; }
+    });
+});
+</script>
 <script>
 (function() {
     var radarEl = document.getElementById('panoramaRadar');

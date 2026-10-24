@@ -124,10 +124,10 @@
             <div class="card">
                 <div class="card-body">
                     <form id="stock-form" class="row g-3">
-                        <div class="col-md-4">
+                        <div class="col-md-4 position-relative">
                             <label for="stock-input" class="form-label">股票代码</label>
-                            <input type="text" class="form-control" id="stock-input" placeholder="请输入股票代码，如：000001.SZ" maxlength="9" value="000001.SZ">
-                            <div class="form-text">支持格式：000001.SZ（深圳）、600000.SH（上海）</div>
+                            <input type="text" class="form-control" id="stock-input" placeholder="请输入股票代码或名称，如：000001 或 平安银行" maxlength="20" value="000001" autocomplete="off">
+                            <div class="form-text">直接输入 6 位代码（如 000001、600000）或名称，支持联想</div>
                         </div>
                         <div class="col-md-3">
                             <label for="period-select" class="form-label">时间周期</label>
@@ -280,6 +280,7 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{{ url_for('static', filename='js/stock_suggest.js') }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 let currentStock = null;
@@ -308,8 +309,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const urlParams = new URLSearchParams(window.location.search);
     const stockFromUrl = urlParams.get('stock');
     if (stockFromUrl) {
-        document.getElementById('stock-input').value = stockFromUrl.toUpperCase();
-        currentStock = stockFromUrl.toUpperCase();
+        const tsCode = toTsCode(stockFromUrl);
+        // 输入框只显示 6 位代码，内部仍用 ts_code
+        document.getElementById('stock-input').value = tsCode.split('.')[0];
+        currentStock = tsCode;
         console.log('从URL获取股票代码:', currentStock);
     }
 
@@ -324,6 +327,15 @@ document.addEventListener('DOMContentLoaded', function() {
     if (stockInput) {
         stockInput.addEventListener('input', handleStockInputChange);
         stockInput.addEventListener('blur', validateStockCode);
+        // 代码/名称联想，选中后输入框显示 6 位代码
+        attachStockSuggest(stockInput, {
+            onSelect: item => {
+                stockInput.value = item.symbol;
+                currentStock = item.ts_code;
+                stockInput.classList.remove('is-invalid');
+                hideTooltip(stockInput);
+            }
+        });
     }
 
     // 图表类型切换后立即重绘主图（无需重新提交分析）
@@ -530,19 +542,7 @@ function hideChartOverlay(containerId) {
 // ========== 处理股票代码输入变化 ==========
 function handleStockInputChange(event) {
     const input = event.target;
-    let value = input.value.toUpperCase();
-
-    // 自动格式化股票代码
-    if (value.length === 6 && !value.includes('.')) {
-        // 根据股票代码前缀自动添加后缀
-        if (value.startsWith('0') || value.startsWith('3')) {
-            value += '.SZ'; // 深圳
-        } else if (value.startsWith('6')) {
-            value += '.SH'; // 上海
-        }
-        input.value = value;
-    }
-
+    const value = input.value.toUpperCase();
     currentStock = value;
 }
 
@@ -553,17 +553,27 @@ function validateStockCode() {
 
     if (value && !isValidStockCode(value)) {
         input.classList.add('is-invalid');
-        showTooltip(input, '请输入正确的股票代码格式，如：000001.SZ 或 600000.SH');
+        showTooltip(input, '请输入 6 位股票代码，如：000001 或 600000');
     } else {
         input.classList.remove('is-invalid');
         hideTooltip(input);
     }
 }
 
-// 检查股票代码格式是否正确
+// 检查股票代码格式是否正确（6 位数字，或带后缀的 ts_code）
 function isValidStockCode(code) {
-    const pattern = /^[0-9]{6}\.(SZ|SH)$/;
-    return pattern.test(code);
+    return /^[0-9]{6}$/.test(code) || /^[0-9]{6}\.(SZ|SH|BJ)$/.test(code);
+}
+
+// 6 位代码补全交易所后缀；已是 ts_code 则原样返回
+function toTsCode(code) {
+    const c = (code || '').trim().toUpperCase();
+    if (/^[0-9]{6}$/.test(c)) {
+        if (c.startsWith('6')) return c + '.SH';
+        if (c.startsWith('4') || c.startsWith('8')) return c + '.BJ';
+        return c + '.SZ';
+    }
+    return c;
 }
 
 // 显示提示信息
@@ -590,20 +600,21 @@ function hideTooltip(element) {
 async function handleAnalysis(event) {
     event.preventDefault();
 
-    const tsCode = document.getElementById('stock-input').value.trim().toUpperCase();
+    const rawCode = document.getElementById('stock-input').value.trim().toUpperCase();
     const period = document.getElementById('period-select').value;
     chartType = document.getElementById('chart-type-select').value;
 
-    if (!tsCode) {
+    if (!rawCode) {
         alert('请输入股票代码');
         return;
     }
 
-    if (!isValidStockCode(tsCode)) {
-        alert('请输入正确的股票代码格式，如：000001.SZ 或 600000.SH');
+    if (!isValidStockCode(rawCode)) {
+        alert('请输入正确的股票代码，如：000001 或 600000');
         return;
     }
 
+    const tsCode = toTsCode(rawCode);
     currentStock = tsCode;
     currentPeriod = period;
 
