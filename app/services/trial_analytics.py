@@ -2,9 +2,22 @@
 
 计算口径与 main/views.py 中原实现保持一致（逻辑原样迁移），数据源为 data/data.parquet 大宽表最新交易日截面。
 """
+import re
 from pathlib import Path
 
 import pandas as pd
+
+
+def normalize_ts_code(code):
+    """6 位裸代码补交易所后缀；已是 ts_code（带后缀）则原样返回。"""
+    c = (code or '').strip().upper()
+    if re.fullmatch(r'\d{6}', c):
+        if c.startswith('6'):
+            return c + '.SH'
+        if c.startswith(('4', '8')):
+            return c + '.BJ'
+        return c + '.SZ'
+    return c
 
 
 def _wide_table_path():
@@ -264,6 +277,7 @@ def financial_health_payload():
 
 def stock_radar_payload(ts_codes):
     """个股对比雷达：2-4 只股票在估值/成长/技术/资金四维的标准化得分。"""
+    ts_codes = [normalize_ts_code(code) for code in ts_codes]
     if len(ts_codes) < 2 or len(ts_codes) > 4:
         raise ValueError('请提供 2 到 4 只股票代码，使用英文逗号分隔')
 
@@ -388,6 +402,7 @@ def stock_radar_payload(ts_codes):
 
 def stock_panorama_payload(ts_code):
     """个股全景：市场快照 + 四维分位雷达 + 财务/技术/资金/状态面板 + 形态标签。"""
+    ts_code = normalize_ts_code(ts_code)
     required_cols = [
         'ts_code', 'name', 'industry', 'area', 'trade_date',
         'close', 'pct_chg', 'change', 'amount', 'vol', 'turnover_rate',
