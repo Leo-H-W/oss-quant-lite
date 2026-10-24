@@ -29,6 +29,7 @@
 | 数据任务删除 API 合约 | tests/api/test_data_jobs_delete_api.py | module_data_jobs |
 | 任务进度页重试入口合约 | tests/ui/test_data_jobs_ui_retry_contract.py | module_data_jobs |
 | 夜间自动初始化合约 | tests/data_jobs/test_auto_init.py | module_data_jobs |
+| 夜间断档感知合约（日频表分区日期 vs 交易日历） | tests/data_jobs/test_auto_init.py | module_data_jobs |
 
 ## 数值软目标（M1 里程碑 review 时人工确认）
 - 无（数据下载模块以结构性合约为主，数值目标由下游模块负责）

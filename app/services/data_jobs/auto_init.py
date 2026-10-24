@@ -36,6 +36,18 @@ ASSET_JOB_CHAIN: Tuple[Tuple[str, str], ...] = (
     ("stock_business.parquet", "text2sql_wide_table"),
 )
 
+# 日频表 → 断档回补作业。资产级检查只看"存在且非空"，发现不了
+# "分区在 10-09 之后再没更新"这类日期断档；这里按交易日历比对最新分区，
+# 断档则提交对应日更作业（作业自带 gap-fill，按交易日历差集回补）。
+DAILY_GAP_JOB_CHAIN: Tuple[Tuple[str, str], ...] = (
+    ("daily_history/daily", "daily_history_by_date"),
+    ("daily_basic/daily", "daily_basic"),
+)
+
+# 盘后数据就绪时间（与 wide_table_status.CUTOFF_HOUR 同口径）：
+# 开市日 18:00 前当日数据不可得，断档期望值回退到上一开市日
+DATA_READY_HOUR = 18
+
 TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 
 DEFAULT_RUN_TIME = "02:30"
@@ -49,6 +61,68 @@ def plan_init_jobs(
     """缺失/空资产 → 按依赖序排列的补齐任务链。空资产视同缺失。"""
     needed = set(missing_assets) | set(empty_assets)
     return [job_type for asset, job_type in ASSET_JOB_CHAIN if asset in needed]
+
+
+def plan_gap_fill_jobs(stale_tables: Iterable[str]) -> List[str]:
+    """断档日频表 → 回补作业链（顺序同 DAILY_GAP_JOB_CHAIN）。"""
+    stale = set(stale_tables)
+    return [job_type for table, job_type in DAILY_GAP_JOB_CHAIN if table in stale]
+
+
+def _latest_partition_date(table_path: Path) -> Optional[str]:
+    """扫描 year=/month=/day= 分区目录名，返回最新分区日期 YYYYMMDD；目录不存在返回 None。"""
+    if not table_path.is_dir():
+        return None
+    latest: Optional[str] = None
+    for day_dir in table_path.glob("year=*/month=*/day=*"):
+        try:
+            y = day_dir.parent.parent.name.split("=", 1)[1]
+            m = day_dir.parent.name.split("=", 1)[1]
+            d = day_dir.name.split("=", 1)[1]
+            ymd = f"{y}{m}{d}"
+        except (IndexError, ValueError):
+            continue
+        if latest is None or ymd > latest:
+            latest = ymd
+    return latest
+
+
+def find_stale_daily_tables(
+    data_dir: Optional[str], now: Optional[datetime] = None
+) -> List[str]:
+    """日频表最新分区落后于"应有最新交易日" → 返回断档表清单。
+
+    应有最新交易日：交易日历中 ≤ 今天的最近开市日；若今天开市但当前
+    时间早于 DATA_READY_HOUR（当日数据尚未发布），回退到上一开市日。
+    目录不存在的表交给资产检查链处理，这里不重复报告。
+    """
+    import pandas as pd  # 延迟导入：纯规划路径不依赖 pandas
+
+    now = now or datetime.now()
+    root = Path(data_dir) if data_dir else Path("data")
+    cal_path = root / "stock_trade_calendar.parquet"
+    if not cal_path.is_file():
+        return []
+
+    cal = pd.read_parquet(cal_path, columns=["cal_date", "is_open"])
+    today = now.strftime("%Y%m%d")
+    open_days = sorted(
+        str(d) for d in cal.loc[cal["is_open"] == 1, "cal_date"] if str(d) <= today
+    )
+    if not open_days:
+        return []
+    expected = open_days[-1]
+    if expected == today and now.hour < DATA_READY_HOUR:
+        if len(open_days) < 2:
+            return []
+        expected = open_days[-2]
+
+    stale: List[str] = []
+    for table, _job_type in DAILY_GAP_JOB_CHAIN:
+        latest = _latest_partition_date(root / table)
+        if latest is not None and latest < expected:
+            stale.append(table)
+    return stale
 
 
 def _wait_for_terminal(
@@ -75,6 +149,7 @@ def run_auto_init(
     service,
     inspect_fn: Callable[[], Tuple[bool, set, set]],
     *,
+    stale_tables_fn: Optional[Callable[[], List[str]]] = None,
     sleep: Callable[[float], None] = time.sleep,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     run_timeout: float = DEFAULT_RUN_TIMEOUT,
@@ -88,6 +163,19 @@ def run_auto_init(
     missing = [asset for asset in PARQUET_ASSETS if asset not in existing]
     empty = [asset for asset in PARQUET_ASSETS if asset in existing and asset not in non_empty]
     jobs = plan_init_jobs(missing, empty)
+
+    # 日期断档检查：资产齐全但分区日期落后时追加日更回补作业
+    if stale_tables_fn is not None:
+        try:
+            stale = list(stale_tables_fn() or [])
+        except Exception as exc:  # noqa: BLE001 - 断档检查失败不应阻断资产链
+            logger.warning(f"[auto-init] 断档检查失败，跳过: {exc}")
+            stale = []
+        if stale:
+            gap_jobs = [j for j in plan_gap_fill_jobs(stale) if j not in jobs]
+            logger.info(f"[auto-init] 日频断档: {stale}，追加回补作业: {gap_jobs}")
+            jobs = jobs + gap_jobs
+
     if not jobs:
         return {"status": "ok", "completed": []}
 
@@ -213,6 +301,7 @@ class AutoInitScheduler:
             return run_auto_init(
                 get_data_job_service(),
                 lambda: inspect_parquet_data_assets(data_dir),
+                stale_tables_fn=lambda: find_stale_daily_tables(data_dir),
             )
         except Exception as exc:  # noqa: BLE001 - 调度线程必须兜底
             logger.error(f"[auto-init] 初始化异常: {exc}")
@@ -279,10 +368,13 @@ def start_auto_init(app) -> Optional[AutoInitScheduler]:
             if not connected:
                 logger.warning("[auto-init] 启动检查：数据目录不可用，等待夜间调度")
                 return
-            if not missing and not empty:
-                logger.info("[auto-init] 启动检查：数据资产齐全，无需补跑")
+            stale = find_stale_daily_tables(data_dir)
+            if not missing and not empty and not stale:
+                logger.info("[auto-init] 启动检查：数据资产齐全且无断档，无需补跑")
                 return
-            logger.info(f"[auto-init] 启动检查：缺失 {missing + empty}，后台补跑")
+            logger.info(
+                f"[auto-init] 启动检查：缺失 {missing + empty}，断档 {stale}，后台补跑"
+            )
             # 补跑不占调度器的当日额度（不 mark_run），夜里仍按原计划巡检
             if scheduler._run_lock.acquire(blocking=False):
                 try:

@@ -250,3 +250,144 @@ def test_scheduler_state_roundtrip(tmp_path):
 def test_scheduler_rejects_invalid_run_time(tmp_path):
     with pytest.raises(ValueError):
         _scheduler(tmp_path, run_time="25:99")
+
+
+# ---------------------------------------------------------------------------
+# 日期连续性检查（断档感知）：最新分区落后于最近开市日 → 触发回补作业
+# ---------------------------------------------------------------------------
+
+import pandas as pd
+
+from app.services.data_jobs.auto_init import (
+    find_stale_daily_tables,
+    plan_gap_fill_jobs,
+)
+
+
+def _write_calendar(root, open_days):
+    cal = pd.DataFrame({
+        "exchange": ["SSE"] * len(open_days),
+        "cal_date": open_days,
+        "is_open": [1] * len(open_days),
+        "pretrade_date": [""] * len(open_days),
+    })
+    cal.to_parquet(root / "stock_trade_calendar.parquet")
+
+
+def _touch_partition(root, rel_table, ymd):
+    part = (
+        root / rel_table
+        / f"year={ymd[:4]}" / f"month={ymd[4:6]}" / f"day={ymd[6:8]}"
+    )
+    part.mkdir(parents=True)
+
+
+def test_find_stale_daily_tables_detects_lag(tmp_path):
+    _write_calendar(tmp_path, ["20261021", "20261022", "20261023"])
+    _touch_partition(tmp_path, "daily_history/daily", "20261009")
+    _touch_partition(tmp_path, "daily_basic/daily", "20261023")
+
+    stale = find_stale_daily_tables(tmp_path, now=datetime(2026, 10, 24, 2, 30))
+
+    assert stale == ["daily_history/daily"]
+
+
+def test_find_stale_daily_tables_fresh_is_not_stale(tmp_path):
+    _write_calendar(tmp_path, ["20261022", "20261023"])
+    _touch_partition(tmp_path, "daily_history/daily", "20261023")
+    _touch_partition(tmp_path, "daily_basic/daily", "20261023")
+
+    assert find_stale_daily_tables(tmp_path, now=datetime(2026, 10, 24, 2, 30)) == []
+
+
+def test_find_stale_daily_tables_before_cutoff_compares_to_previous_open_day(tmp_path):
+    """凌晨 02:30 检查时当日数据尚未发布，期望值须回退到上一开市日，
+    否则每天夜里都会误报断档并空拉当日（数据不存在）。"""
+    _write_calendar(tmp_path, ["20261023", "20261024"])
+    _touch_partition(tmp_path, "daily_history/daily", "20261023")
+    _touch_partition(tmp_path, "daily_basic/daily", "20261023")
+
+    assert find_stale_daily_tables(tmp_path, now=datetime(2026, 10, 24, 2, 30)) == []
+
+
+def test_find_stale_daily_tables_after_cutoff_expects_today(tmp_path):
+    """18:00 后当日数据应已就绪，缺当日分区即断档。"""
+    _write_calendar(tmp_path, ["20261023", "20261024"])
+    _touch_partition(tmp_path, "daily_history/daily", "20261023")
+    _touch_partition(tmp_path, "daily_basic/daily", "20261024")
+
+    stale = find_stale_daily_tables(tmp_path, now=datetime(2026, 10, 24, 20, 0))
+
+    assert stale == ["daily_history/daily"]
+
+
+def test_find_stale_daily_tables_skips_missing_dir(tmp_path):
+    """目录缺失由资产检查链负责，断档检查不重复提交同一作业。"""
+    _write_calendar(tmp_path, ["20261023"])
+    _touch_partition(tmp_path, "daily_basic/daily", "20261023")
+
+    assert find_stale_daily_tables(tmp_path, now=datetime(2026, 10, 24, 2, 30)) == []
+
+
+def test_plan_gap_fill_jobs_maps_stale_tables_in_chain_order():
+    assert plan_gap_fill_jobs(["daily_basic/daily", "daily_history/daily"]) == [
+        "daily_history_by_date",
+        "daily_basic",
+    ]
+    assert plan_gap_fill_jobs([]) == []
+
+
+def test_run_auto_init_gap_fill_runs_when_assets_healthy():
+    service = _FakeService()
+    result = run_auto_init(
+        service,
+        _healthy_inspect,
+        stale_tables_fn=lambda: ["daily_history/daily"],
+        sleep=lambda _: None,
+    )
+
+    assert result["status"] == "success"
+    assert service.submitted == ["daily_history_by_date"]
+    assert result["completed"] == ["daily_history_by_date"]
+
+
+def test_run_auto_init_no_gap_jobs_when_fresh():
+    service = _FakeService()
+    result = run_auto_init(
+        service,
+        _healthy_inspect,
+        stale_tables_fn=lambda: [],
+        sleep=lambda _: None,
+    )
+
+    assert result["status"] == "ok"
+    assert service.submitted == []
+
+
+def test_run_auto_init_gap_fill_failure_interrupts():
+    service = _FakeService(fail_on="daily_history_by_date")
+    result = run_auto_init(
+        service,
+        _healthy_inspect,
+        stale_tables_fn=lambda: ["daily_history/daily", "daily_basic/daily"],
+        sleep=lambda _: None,
+    )
+
+    assert result["status"] == "failed"
+    assert service.submitted == ["daily_history_by_date"]
+
+
+def test_run_auto_init_dedupes_gap_job_already_in_asset_chain():
+    """资产链已含 daily_history_by_date 时，断档检查不得重复提交。"""
+    existing = set(_ALL_ASSETS) - {"daily_history/daily"}
+    inspect = lambda: (True, existing, existing)  # noqa: E731
+    service = _FakeService()
+    result = run_auto_init(
+        service,
+        inspect,
+        stale_tables_fn=lambda: ["daily_history/daily"],
+        sleep=lambda _: None,
+    )
+
+    assert result["status"] == "success"
+    assert service.submitted == ["daily_history_by_date"]
