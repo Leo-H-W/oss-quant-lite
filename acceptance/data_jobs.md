@@ -34,7 +34,7 @@
 | 健康度自动修复合约（收割孤儿 + 断档回补提交） | tests/data_jobs/test_health.py | module_data_jobs |
 | 健康度 API 合约（GET /health、POST /health/repair） | tests/api/test_data_jobs_health_api.py | module_data_jobs |
 | moneyflow 历史回补驱动合约（日期计划/断点续跑/分片） | tests/data_jobs/test_moneyflow_tdx_backfill.py | module_data_jobs |
-| Baostock 断流处理合约（错误码非 0 必须抛出触发重登录） | tests/data_jobs/test_baostock_disconnect_contract.py | module_data_jobs |
+| Baostock 断流处理合约（连接类错误码抛出触发重登录；10004011 北交所不支持按空数据处理） | tests/data_jobs/test_baostock_disconnect_contract.py | module_data_jobs |
 
 ### 健康度监控验收标准（2026-10-26 新增）
 

@@ -54,6 +54,28 @@ def _watchdog(seconds: int):
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old)
 
+# baostock 错误码处理策略：非零默认抛出（2026-10-26 断流事故教训——宁可任务
+# 可见地失败，不可静默空手而归）；仅"标的维度确定性空结果"的错误码按空数据
+# 处理：10004011 股票代码未标识sh或sz（北交所 bj.* 不受 baostock 支持，
+# ~351 只标的每轮必报，抛异常会触发逐股重登录风暴并把整轮任务误判失败，
+# 2026-10-28 夜间 daily_basic 即因此链路中断）
+EMPTY_RESULT_ERROR_CODES = frozenset({"10004011"})
+
+
+def raise_if_disconnected(rs, ts_code: str) -> bool:
+    """连接类错误码抛 ConnectionError；标的类空结果返回 True（调用方按空处理）。"""
+    if rs.error_code == "0":
+        return False
+    if rs.error_code in EMPTY_RESULT_ERROR_CODES:
+        return True
+    # 连接断流时 baostock 不抛异常，只回填错误码并返回空；
+    # 必须显式抛出让上层重登录换连接，否则死连接会被复用，
+    # 后续每只标的都静默空手而归（2026-10-26 事故）
+    raise ConnectionError(
+        f"baostock 查询失败 {ts_code}: {rs.error_code} {rs.error_msg}"
+    )
+
+
 KLINE_FIELDS = "date,close,turn,peTTM,pbMRQ,psTTM"
 COLUMN_MAP = {
     "date": "trade_date",
@@ -98,13 +120,8 @@ def fetch_stock(bs_module, ts_code: str, start: str, end: str) -> pd.DataFrame:
         frequency="d",
         adjustflag="3",  # 不复权：与 tushare daily_basic 口径一致
     )
-    if rs.error_code != "0":
-        # 连接断流时 baostock 不抛异常，只回填错误码并返回空；
-        # 必须显式抛出让上层重登录换连接，否则死连接会被复用，
-        # 后续每只标的都静默空手而归（2026-10-26 事故）
-        raise ConnectionError(
-            f"baostock 查询失败 {ts_code}: {rs.error_code} {rs.error_msg}"
-        )
+    if raise_if_disconnected(rs, ts_code):
+        return pd.DataFrame()
     rows = []
     while rs.error_code == "0" and rs.next():
         rows.append(rs.get_row_data())

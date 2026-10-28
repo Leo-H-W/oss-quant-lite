@@ -31,6 +31,7 @@ from app.services.data_reader import ParquetDataReader  # noqa: E402
 from app.utils.daily_basic_baostock import (  # noqa: E402
     FETCH_TIMEOUT,
     _watchdog,
+    raise_if_disconnected,
     ts_code_to_bs,
 )
 from app.utils.parquet_job_helpers import (  # noqa: E402
@@ -62,12 +63,9 @@ def fetch_adjust_events(bs_module, ts_code: str) -> pd.DataFrame:
     if not bs_code:
         return pd.DataFrame()
     rs = bs_module.query_adjust_factor(code=bs_code)
-    if rs.error_code != "0":
-        # 连接断流时 baostock 只回填错误码不抛异常；显式抛出触发上层重登录，
-        # 避免死连接被复用导致整轮标的静默失败
-        raise ConnectionError(
-            f"baostock 查询失败 {ts_code}: {rs.error_code} {rs.error_msg}"
-        )
+    if raise_if_disconnected(rs, ts_code):
+        # 北交所等不受支持标的：无除权事件，按因子 1.0 处理
+        return pd.DataFrame()
     rows = []
     while rs.error_code == "0" and rs.next():
         rows.append(rs.get_row_data())
