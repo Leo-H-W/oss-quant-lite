@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, request
 
+from app.services.data_jobs.health import collect_health_report, repair_health
 from app.services.data_jobs.service import DataJobService, JobActiveError
 from app.services.wide_table_status import get_wide_table_status
 
@@ -105,6 +106,36 @@ def retry_run(run_id: int):
         return jsonify({"success": False, "error": str(exc)}), 500
 
     return jsonify({"success": True, "run_id": run.id, "status": run.status})
+
+
+@data_jobs_bp.route("/health", methods=["GET"])
+def job_health():
+    """任务健康度报告：假 running / 近期失败 / 巡检心跳 / 数据断档 / 分区完整度。"""
+    from flask import current_app
+
+    try:
+        report = collect_health_report(
+            get_data_job_service(), data_dir=current_app.config.get("DATA_DIR")
+        )
+        return jsonify({"success": True, "health": report})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@data_jobs_bp.route("/health/repair", methods=["POST"])
+def job_health_repair():
+    """按健康报告执行修复：收割孤儿任务 + 断档表回补提交，返回动作清单与修复后报告。"""
+    from flask import current_app
+
+    try:
+        service = get_data_job_service()
+        data_dir = current_app.config.get("DATA_DIR")
+        report = collect_health_report(service, data_dir=data_dir)
+        actions = repair_health(service, report)
+        refreshed = collect_health_report(service, data_dir=data_dir)
+        return jsonify({"success": True, "actions": actions, "health": refreshed})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 
 @data_jobs_bp.route("/init-status", methods=["GET"])

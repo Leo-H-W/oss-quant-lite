@@ -6,9 +6,22 @@
 
 ### 结构性门禁
 - [x] `pytest -m module_data_jobs` 全绿（2026-04-10 验收，13 个测试全绿）
+- [x] `pytest -m module_data_jobs` 全绿（2026-10-26 复验，197 passed，含新增任务健康度监控 19 项合约）
 
 ### 数值软目标
 - N/A
+
+### 2026-10-26 健康度监控补记
+- 起因：10-24 晚服务进程中断，夜间 auto-init 缺席两夜无人察觉；daily_basic 留下 631/5572 行残缺分区
+- 新增：`app/services/data_jobs/health.py` 五项检查（孤儿/近期失败/巡检心跳/断档/分区完整度）
+  + `GET /api/data-jobs/health`、`POST /api/data-jobs/health/repair`；夜间巡检结果携带健康快照
+- moneyflow 历史回填：实测通达信分笔历史可回溯一年以上且与日线成交量逐手吻合，
+  新增 `app/utils/moneyflow_tdx_backfill.py` 分片驱动（断点续跑、新→旧、4 路各钉一台服务器），
+  回填 2026 年初至今 193 个交易日（4 路并行，预计 ~20 小时）
+- 修复 Baostock 生产者断流缺陷：baostock socket 层吞异常导致死连接被复用、
+  全市场静默失败（daily_basic 632 行卡死 22 分钟）；两个生产者脚本现对非零错误码
+  显式抛 ConnectionError 触发重登录
+- 模块门禁：pytest -m module_data_jobs 207 passed（含新增健康度 19 项 + 回补驱动 7 项 + 断流 3 项）
 
 ---
 

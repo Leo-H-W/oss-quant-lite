@@ -98,6 +98,13 @@ def fetch_stock(bs_module, ts_code: str, start: str, end: str) -> pd.DataFrame:
         frequency="d",
         adjustflag="3",  # 不复权：与 tushare daily_basic 口径一致
     )
+    if rs.error_code != "0":
+        # 连接断流时 baostock 不抛异常，只回填错误码并返回空；
+        # 必须显式抛出让上层重登录换连接，否则死连接会被复用，
+        # 后续每只标的都静默空手而归（2026-10-26 事故）
+        raise ConnectionError(
+            f"baostock 查询失败 {ts_code}: {rs.error_code} {rs.error_msg}"
+        )
     rows = []
     while rs.error_code == "0" and rs.next():
         rows.append(rs.get_row_data())

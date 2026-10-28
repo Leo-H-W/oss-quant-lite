@@ -62,6 +62,12 @@ def fetch_adjust_events(bs_module, ts_code: str) -> pd.DataFrame:
     if not bs_code:
         return pd.DataFrame()
     rs = bs_module.query_adjust_factor(code=bs_code)
+    if rs.error_code != "0":
+        # 连接断流时 baostock 只回填错误码不抛异常；显式抛出触发上层重登录，
+        # 避免死连接被复用导致整轮标的静默失败
+        raise ConnectionError(
+            f"baostock 查询失败 {ts_code}: {rs.error_code} {rs.error_msg}"
+        )
     rows = []
     while rs.error_code == "0" and rs.next():
         rows.append(rs.get_row_data())

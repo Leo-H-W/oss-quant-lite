@@ -196,6 +196,10 @@ class DataJobService:
             delete(run_id)
         return new_run
 
+    def is_run_active(self, run_id: int) -> bool:
+        """公开判活：供健康检查等只读路径使用（与读时判活同一注册表）。"""
+        return self._is_active(run_id)
+
     def list_job_definitions(self, visible_only: bool = True):
         if visible_only:
             return self.registry.list_visible_jobs()

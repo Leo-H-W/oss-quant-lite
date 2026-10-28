@@ -30,6 +30,24 @@
 | 任务进度页重试入口合约 | tests/ui/test_data_jobs_ui_retry_contract.py | module_data_jobs |
 | 夜间自动初始化合约 | tests/data_jobs/test_auto_init.py | module_data_jobs |
 | 夜间断档感知合约（日频表分区日期 vs 交易日历） | tests/data_jobs/test_auto_init.py | module_data_jobs |
+| 任务健康度报告合约（孤儿/失败/心跳/断档/分区完整度五项检查） | tests/data_jobs/test_health.py | module_data_jobs |
+| 健康度自动修复合约（收割孤儿 + 断档回补提交） | tests/data_jobs/test_health.py | module_data_jobs |
+| 健康度 API 合约（GET /health、POST /health/repair） | tests/api/test_data_jobs_health_api.py | module_data_jobs |
+| moneyflow 历史回补驱动合约（日期计划/断点续跑/分片） | tests/data_jobs/test_moneyflow_tdx_backfill.py | module_data_jobs |
+| Baostock 断流处理合约（错误码非 0 必须抛出触发重登录） | tests/data_jobs/test_baostock_disconnect_contract.py | module_data_jobs |
+
+### 健康度监控验收标准（2026-10-26 新增）
+
+背景：2026-10-24 晚服务进程中断，夜间 auto-init 静默缺席两个夜晚无人察觉；
+daily_basic 出现 631/5572 行的残缺分区却被视为"已有数据"。
+
+- `collect_health_report` 输出五项检查：orphan_runs（假 running）、recent_failures、
+  auto_init_heartbeat（巡检心跳）、data_freshness（交易日断档）、partition_completeness
+  （最新分区行数 vs daily_history 同日基准，默认阈值 0.8）
+- 严重度聚合：orphan/心跳缺失 → critical；失败/断档/残缺 → warning；全部通过 → ok
+- `repair_health`：孤儿落 failed（复用 ORPHAN_ERROR_MESSAGE），断档表按
+  DAILY_GAP_JOB_CHAIN 顺序提交回补，重复在跑任务礼让不报错
+- 夜间 auto-init 结果携带健康快照落盘 auto_init_state.json
 
 ## 数值软目标（M1 里程碑 review 时人工确认）
 - 无（数据下载模块以结构性合约为主，数值目标由下游模块负责）
@@ -38,5 +56,5 @@
 - 无（数据入口模块）
 
 ## 验收状态
-- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed）
+- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed；2026-10-26 健康度监控新增后：197 passed）
 - [ ] 数值软目标：N/A

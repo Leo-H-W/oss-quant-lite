@@ -299,17 +299,52 @@ class AutoInitScheduler:
         self.mark_run(now, result)
         return result
 
+    def _execute_with_health(
+        self,
+        run_fn: Callable[[], Dict[str, object]],
+        service,
+        now: Optional[datetime] = None,
+        data_dir: Optional[str] = None,
+    ) -> Dict[str, object]:
+        """执行补齐链并附加健康快照。
+
+        心跳检查以"本次巡检正在发生"为准（mark_run 在返回后才落盘，
+        直接读状态文件会把本次误判为缺席）。健康快照失败不阻断巡检结果。
+        """
+        result = run_fn()
+        try:
+            from app.services.data_jobs.health import collect_health_report
+
+            now = now or datetime.now()
+            health = collect_health_report(
+                service,
+                data_dir=data_dir,
+                now=now,
+                auto_init_state={"last_run_date": now.date().isoformat()},
+            )
+            result["health"] = {"status": health["status"]}
+            if health["status"] != "ok":
+                logger.warning(f"[auto-init] 健康快照 {health['status']}: {health['checks']}")
+        except Exception as exc:  # noqa: BLE001 - 健康快照失败不阻断巡检
+            logger.warning(f"[auto-init] 健康快照失败: {exc}")
+        return result
+
     def _execute(self) -> Dict[str, object]:
         # 延迟导入：模块加载不触碰 Flask/service，保持纯函数可测
         from app.api.data_jobs_api import get_data_job_service
         from startup_runtime import inspect_parquet_data_assets
 
         data_dir = self.app.config.get("DATA_DIR") if self.app is not None else None
+        service = get_data_job_service()
         try:
-            return run_auto_init(
-                get_data_job_service(),
-                lambda: inspect_parquet_data_assets(data_dir),
-                stale_tables_fn=lambda: find_stale_daily_tables(data_dir),
+            return self._execute_with_health(
+                lambda: run_auto_init(
+                    service,
+                    lambda: inspect_parquet_data_assets(data_dir),
+                    stale_tables_fn=lambda: find_stale_daily_tables(data_dir),
+                ),
+                service=service,
+                data_dir=data_dir,
             )
         except Exception as exc:  # noqa: BLE001 - 调度线程必须兜底
             logger.error(f"[auto-init] 初始化异常: {exc}")
