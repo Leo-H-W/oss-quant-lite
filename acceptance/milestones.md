@@ -11,6 +11,24 @@
 ### 数值软目标
 - N/A
 
+### 2026-10-29 内存防护补记（data_reader 下推 + ma_calculator 流式化）
+- 起因：1.8GB 无 swap 机器 + earlyoom，逐项内存评估发现两处不可运行/高放大点
+- 修复 1：`app/services/data_reader.py:_read_table` 列裁剪（读分区时只请求标准列 ∩ 文件实际列）
+  + ts_code 谓词下推（分区级先过滤再 concat）；单股/小组合查询峰值从"日期范围×全市场"
+  降为"日期范围×目标股票"，回测/组合优化/ML 训练同步受益（公共 API 签名不变）
+- 修复 2：`app/utils/ma_calculator.py` 单遍流式扫描分区 + deque(maxlen=250) 只留尾部收盘价，
+  峰值内存与数据年限无关（旧实现逐股全表读 11 年全市场，峰值 1–2.5GB 必被杀且 IO 5400 倍放大）
+- 结构性门禁：新增 tests/services/test_data_reader_pushdown.py（4 项）+
+  tests/services/test_ma_calculator_streaming.py（6 项），均打 module_data_jobs marker；
+  `pytest -m module_data_jobs` 219 passed；依赖方 module_factor_engine/backtest/portfolio/
+  scoring/ml_model/feature_engineering 208 passed；`pytest -q` 全量 820 passed
+- 数值软目标（2026-10-29 实测，1.8GB 无 swap 机器）：
+  - ma_calculator 真实数据（529MB / ~2670 分区 / 5578 只股票）实跑 54s 完成，
+    **峰值 RSS 234MB**（旧实现评估峰值 1–2.5GB，必被 earlyoom 杀；IO 从 5400 次全表扫描降为单遍）
+  - 落盘 stock_ma_data.parquet 5578 行 / 596KB（旧文件 57MB 为多次追加的重复累积，语义不变）
+  - 数值抽检：600519.SH ma5 重算与落盘差 2.3e-13
+  - data_reader 下推后单股 11 年全历史读取进程峰值 RSS 206MB（含 Python/pandas 基线 ~150MB）
+
 ### 2026-10-26 健康度监控补记
 - 起因：10-24 晚服务进程中断，夜间 auto-init 缺席两夜无人察觉；daily_basic 留下 631/5572 行残缺分区
 - 新增：`app/services/data_jobs/health.py` 五项检查（孤儿/近期失败/巡检心跳/断档/分区完整度）
