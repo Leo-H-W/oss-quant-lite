@@ -118,6 +118,9 @@ export interface MinuteStats {
   latest_time: string | null
   earliest_time: string | null
   period_stats: Record<string, number>
+  // 日线资产口径新增：表 key → 中文名；旧分钟口径响应无此字段，渲染时回退为 key
+  period_names?: Record<string, string>
+  scope?: string
 }
 
 export const fetchMinuteStats = async (): Promise<MinuteStats | null> => {

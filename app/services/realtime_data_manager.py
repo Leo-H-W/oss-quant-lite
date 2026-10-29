@@ -7,7 +7,11 @@
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
+import os
+import re
+import time
 import pandas as pd
+import pyarrow.parquet as pq
 from app.services.minute_data_sync_service import MinuteDataSyncService
 from app.services.tongdaxin_minute_sync_service import TongdaxinMinuteSyncService
 from app.services.data_reader import ParquetDataReader
@@ -574,3 +578,81 @@ class RealtimeDataManager:
             'earliest_time': earliest_time.isoformat() if pd.notna(earliest_time) else None,
             'total_records': int(len(combined)),
         }
+
+    # ------------------------------------------------------------------
+    # 日线数据资产统计（数据管理页"总股票数/总记录数"口径）
+    # ------------------------------------------------------------------
+
+    # 只读分区目录 + parquet footer 元数据（num_rows），不加载数据，
+    # 内存恒定；结果按 TTL 缓存，页面刷新不重复扫盘。
+    DAILY_STATS_TTL_SECONDS = 300
+    DAILY_ASSET_TABLES = {
+        "daily": "日线行情",
+        "daily_basic": "每日指标",
+        "stk_factor": "技术因子",
+        "moneyflow": "资金流向",
+        "cyq_perf": "筹码分布",
+    }
+    _PARTITION_DATE_RE = re.compile(r"year=(\d{4})/month=(\d{2})/day=(\d{2})")
+
+    def get_daily_stats(self) -> Dict:
+        """盘点日线数据资产：各表记录数、总股票数、日期覆盖范围。
+
+        与 get_minute_stats 的区别：统计对象是日线分区表（daily_history/
+        daily_basic/stk_factor/moneyflow/cyq_perf），行数来自 parquet
+        footer 元数据，不加载任何数据帧；总股票数取最新日线分区的
+        ts_code 单列投影去重。
+        """
+        now = time.time()
+        cache = getattr(self, "_daily_stats_cache", None)
+        if cache and now - cache[0] < self.DAILY_STATS_TTL_SECONDS:
+            return cache[1]
+
+        reader = self.data_reader
+        period_stats: Dict[str, int] = {}
+        total_records = 0
+        earliest_date: Optional[str] = None
+        latest_date: Optional[str] = None
+
+        for table in self.DAILY_ASSET_TABLES:
+            base = os.path.join(reader.data_dir, reader.TABLE_DIRS[table])
+            rows = 0
+            if os.path.isdir(base):
+                for path in reader._walk_partitions(base, None, None):
+                    try:
+                        rows += pq.read_metadata(path).num_rows
+                    except Exception as e:
+                        logger.warning(f"读取分区元数据失败 {path}: {e}")
+                    m = self._PARTITION_DATE_RE.search(path)
+                    if m:
+                        dt = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+                        if earliest_date is None or dt < earliest_date:
+                            earliest_date = dt
+                        if latest_date is None or dt > latest_date:
+                            latest_date = dt
+            period_stats[table] = rows
+            total_records += rows
+
+        # 总股票数：最新日线分区的 ts_code 单列投影（几 KB，不读全表）
+        total_stocks = 0
+        daily_base = os.path.join(reader.data_dir, reader.TABLE_DIRS["daily"])
+        if os.path.isdir(daily_base):
+            latest_path = reader._find_latest_parquet(daily_base)
+            if latest_path:
+                try:
+                    codes = pq.read_table(latest_path, columns=["ts_code"]).column("ts_code").to_pylist()
+                    total_stocks = len({str(c) for c in codes if c})
+                except Exception as e:
+                    logger.warning(f"读取最新日线分区股票清单失败 {latest_path}: {e}")
+
+        payload = {
+            'period_stats': period_stats,
+            'period_names': dict(self.DAILY_ASSET_TABLES),
+            'total_stocks': total_stocks,
+            'latest_time': f"{latest_date}T00:00:00" if latest_date else None,
+            'earliest_time': f"{earliest_date}T00:00:00" if earliest_date else None,
+            'total_records': total_records,
+            'scope': 'daily',
+        }
+        self._daily_stats_cache = (now, payload)
+        return payload

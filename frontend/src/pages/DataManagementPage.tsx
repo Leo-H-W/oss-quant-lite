@@ -786,7 +786,7 @@ export default function DataManagementPage() {
             {stats &&
               Object.entries(stats.period_stats).map(([p, count]) => (
                 <span className="chip" key={p}>
-                  {p} · {formatNumber(count, 0)} 条
+                  {stats.period_names?.[p] ?? p} · {formatNumber(count, 0)} 条
                 </span>
               ))}
           </div>

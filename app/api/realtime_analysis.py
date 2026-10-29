@@ -453,9 +453,9 @@ def batch_sync_data():
 
 @realtime_analysis_bp.route('/data/stats', methods=['GET'])
 def get_data_stats():
-    """获取数据统计信息"""
+    """获取数据统计信息（日线数据资产口径：分区元数据扫描，内存恒定）"""
     try:
-        payload = data_manager.get_minute_stats()
+        payload = data_manager.get_daily_stats()
         
         return jsonify({
             'success': True,

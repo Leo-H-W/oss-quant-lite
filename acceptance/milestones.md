@@ -11,6 +11,20 @@
 ### 数值软目标
 - N/A
 
+### 2026-10-29 数据管理页统计口径修复（分钟线 → 日线资产）
+- 起因：数据管理页"总股票数/总记录数"恒为 0——`/api/realtime-analysis/data/stats`
+  旧实现只统计 stock_minute 分钟线（本机从未下载分钟数据），与日线资产齐全的实况不符
+- 新增 `RealtimeDataManager.get_daily_stats`：只读分区目录 + parquet footer 元数据
+  （num_rows）汇总各日线表记录数，总股票数取最新日线分区 ts_code 单列投影，
+  内存恒定；结果 300s TTL 缓存避免页面刷新重复扫盘
+- 端点切换至日线口径；Flask 模板页卡片改"数据资产分布（日线）"（中文名由后端下发），
+  React DataManagementPage 同步适配 period_names 并重新打包 dist
+- 实测（真实数据）：首次扫描 12.3s（TTL 内二次调用 0ms）、进程峰值 RSS 172MB；
+  日线行情 10,442,761 条 / 筹码分布 10,442,761 条 / 技术因子 2,387,466 条 /
+  资金流向 1,019,265 条 / 每日指标 227,670 条，总股票数 5,570，覆盖 2015-01-05 ~ 2026-10-28
+- 合约测试：tests/services/test_daily_asset_stats.py 4 项（module_data_jobs marker）；
+  API 合约同步更新；`pytest -q` 全量 824 passed
+
 ### 2026-10-29 内存防护补记（data_reader 下推 + ma_calculator 流式化）
 - 起因：1.8GB 无 swap 机器 + earlyoom，逐项内存评估发现两处不可运行/高放大点
 - 修复 1：`app/services/data_reader.py:_read_table` 列裁剪（读分区时只请求标准列 ∩ 文件实际列）

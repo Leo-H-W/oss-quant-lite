@@ -144,12 +144,14 @@ def test_minute_stats_and_quality_endpoints_return_summary_contract():
     client = app.test_client()
 
     with patch("app.api.realtime_analysis.data_manager") as manager:
-        manager.get_minute_stats.return_value = {
-            "period_stats": {"1min": 2, "5min": 0, "15min": 0, "30min": 0, "60min": 0},
+        manager.get_daily_stats.return_value = {
+            "period_stats": {"daily": 2, "daily_basic": 0, "stk_factor": 0, "moneyflow": 0, "cyq_perf": 0},
+            "period_names": {"daily": "日线行情"},
             "total_stocks": 2,
-            "latest_time": "2026-06-04T09:31:00",
-            "earliest_time": "2026-06-04T09:30:00",
+            "latest_time": "2026-06-04T00:00:00",
+            "earliest_time": "2026-06-03T00:00:00",
             "total_records": 2,
+            "scope": "daily",
         }
         manager.check_data_quality.return_value = {
             "status": "ok",
