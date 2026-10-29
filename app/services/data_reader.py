@@ -20,6 +20,16 @@ from app.services.minute_parquet_reader import MinuteParquetReader
 _missing_dir_warned: Set[str] = set()
 
 
+def _parquet_file_columns(path: str) -> Optional[List[str]]:
+    """只读 parquet 文件 schema 拿列名（不加载数据），失败时返回 None。"""
+    try:
+        import pyarrow.parquet as pq
+
+        return pq.read_schema(path).names
+    except Exception:
+        return None
+
+
 class ParquetDataReader:
     """从本地 Parquet 分区文件读取日行情 / 日基本面数据。"""
 
@@ -488,10 +498,25 @@ class ParquetDataReader:
                 logger.debug(f"Parquet 目录不存在: {base}")
             return pd.DataFrame()
 
+        # 内存防护（小内存机器 earlyoom 会杀大 RSS 进程）：
+        # 1) 列裁剪——读分区时只请求标准列 ∩ 文件实际列，而不是全列读入再裁剪；
+        # 2) ts_code 谓词下推——分区级先过滤股票，concat 只积累目标行。
+        # 两处合力把单股/小组合查询的峰值内存从"日期范围×全市场"降到
+        # "日期范围×目标股票"（回测/组合优化/ML 训练的主要内存来源）。
+        std_cols = self.STANDARD_COLUMNS.get(table)
+        code_set = set(ts_codes) if ts_codes is not None else None
+
         frames = []
         for parquet_path in self._walk_partitions(base, sd, ed):
             try:
-                df = pd.read_parquet(parquet_path)
+                read_cols = None
+                if std_cols:
+                    file_cols = _parquet_file_columns(parquet_path)
+                    if file_cols is not None:
+                        read_cols = [c for c in std_cols if c in file_cols]
+                df = pd.read_parquet(parquet_path, columns=read_cols)
+                if code_set is not None and "ts_code" in df.columns:
+                    df = df[df["ts_code"].isin(code_set)]
                 if not df.empty:
                     frames.append(df)
             except Exception as e:
@@ -502,15 +527,14 @@ class ParquetDataReader:
 
         result = pd.concat(frames, ignore_index=True)
 
-        # 只保留标准列，过滤掉可能混入的额外列
-        std_cols = self.STANDARD_COLUMNS.get(table)
+        # 只保留标准列，过滤掉可能混入的额外列（读取侧已裁剪，此为兜底：
+        # schema 探测失败退回全列读取时仍保证输出列一致）
         if std_cols:
             keep = [c for c in std_cols if c in result.columns]
             result = result[keep]
 
-        # 按股票代码过滤
-        if ts_codes is not None:
-            code_set = set(ts_codes)
+        # 按股票代码过滤（读取侧已下推，此为兜底）
+        if code_set is not None and "ts_code" in result.columns:
             result = result[result["ts_code"].isin(code_set)]
 
         # 排序
