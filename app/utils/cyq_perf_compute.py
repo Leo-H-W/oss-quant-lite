@@ -23,6 +23,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import numpy as np
 import pandas as pd
@@ -32,13 +33,23 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from app.services.data_reader import ParquetDataReader  # noqa: E402
 from app.utils.parquet_job_helpers import normalize_ymd  # noqa: E402
 from app.utils.parquet_writer import save_to_parquet  # noqa: E402
 
 REL_TABLE = "cyq_perf/daily"
+DAILY_REL = "daily_history/daily"
+BASIC_REL = "daily_basic/daily"
 BIN_COUNT = 100
 TURNOVER_CAP = 0.5  # 单日换手封顶 50%，防异常值把筹码一天清空
+
+# 按股票分批 + 逐分区列裁剪读取。全市场全历史一次性 get_daily 会
+# concat 出千万行级 DataFrame（实测 RSS >700MB），小内存机器上被
+# earlyoom SIGTERM；分批把峰值压到「批内股票 × 交易日」的规模。
+# 默认 300：1.4GiB 内存机器上实测批=1000 仍会触线（输入 + 输出缓冲
+# 双份大 Frame），300 时峰值 ~400MB。
+DAILY_COLS = ["ts_code", "trade_date", "low", "high", "close", "vol", "amount"]
+BASIC_COLS = ["ts_code", "trade_date", "turnover_rate"]
+STOCK_BATCH = int(os.getenv("CYQ_PERF_STOCK_BATCH", "300"))
 
 OUTPUT_COLS = [
     "ts_code", "trade_date", "his_low", "his_high",
@@ -155,7 +166,64 @@ def merge_save(chunk: pd.DataFrame) -> int:
     return total
 
 
+def _partition_file(data_root: str, rel_table: str, ymd: str) -> Path:
+    return (
+        Path(data_root) / rel_table
+        / f"year={ymd[0:4]}" / f"month={ymd[4:6]}" / f"day={ymd[6:8]}"
+        / "data.parquet"
+    )
+
+
+def _load_columns_for_codes(
+    rel_table: str,
+    columns: List[str],
+    codes: set,
+    start: str,
+    end: str,
+    data_root: str,
+) -> pd.DataFrame:
+    """逐分区读取 + 列裁剪 + 代码过滤，峰值内存只含本批次股票的行。"""
+    from app.utils.parquet_job_helpers import existing_partition_dates
+
+    frames = []
+    for ymd in sorted(existing_partition_dates(rel_table, data_root)):
+        if ymd < start or ymd > end:
+            continue
+        path = _partition_file(data_root, rel_table, ymd)
+        if not path.is_file():
+            continue
+        try:
+            df = pd.read_parquet(path, columns=columns)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cyq_perf_compute] 读取分区失败 {path}: {exc}")
+            continue
+        df = df[df["ts_code"].astype(str).isin(codes)]
+        if not df.empty:
+            frames.append(df)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _list_daily_codes(data_root: str, start: str, end: str) -> List[str]:
+    """扫描日线分区收集股票代码全集（含已退市，stock_basic 不一定覆盖）。"""
+    from app.utils.parquet_job_helpers import existing_partition_dates
+
+    codes: set = set()
+    for ymd in sorted(existing_partition_dates(DAILY_REL, data_root)):
+        if ymd < start or ymd > end:
+            continue
+        path = _partition_file(data_root, DAILY_REL, ymd)
+        if not path.is_file():
+            continue
+        try:
+            codes.update(pd.read_parquet(path, columns=["ts_code"])["ts_code"].astype(str))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cyq_perf_compute] 读取分区失败 {path}: {exc}")
+    return sorted(codes)
+
+
 def main() -> int:
+    import gc
+
     start = normalize_ymd(os.getenv("DATA_JOB_START_DATE"))
     end = normalize_ymd(os.getenv("DATA_JOB_END_DATE"))
     if not start:
@@ -170,47 +238,58 @@ def main() -> int:
     if not end:
         end = datetime.now().strftime("%Y%m%d")
 
-    reader = ParquetDataReader()
-    daily = reader.get_daily(start_date=start, end_date=end)
-    if daily.empty:
+    from app.utils.parquet_writer import _data_root
+
+    data_root = _data_root(None)
+
+    ts_codes = _list_daily_codes(data_root, start, end)
+    if not ts_codes:
         print(f"[cyq_perf_compute] 区间 {start}~{end} 无日线数据")
         return 1
-    basic = reader.get_daily_basic(start_date=start, end_date=end)
-
-    daily = daily.copy()
-    daily["trade_date"] = pd.to_datetime(daily["trade_date"])
-    if not basic.empty:
-        basic = basic.copy()
-        basic["trade_date"] = pd.to_datetime(basic["trade_date"])
-        daily = daily.merge(
-            basic[["ts_code", "trade_date", "turnover_rate"]],
-            on=["ts_code", "trade_date"], how="left",
-        )
-    else:
-        daily["turnover_rate"] = np.nan
-
-    ts_codes = sorted(daily["ts_code"].astype(str).unique().tolist())
-    print(f"[cyq_perf_compute] 区间 {start}~{end}，标的 {len(ts_codes)} 只，bins={BIN_COUNT}")
+    print(f"[cyq_perf_compute] 区间 {start}~{end}，标的 {len(ts_codes)} 只，"
+          f"bins={BIN_COUNT}，批大小 {STOCK_BATCH}", flush=True)
 
     total_saved = 0
     failed = []
-    buffer = []
+    processed = 0
     t0 = time.time()
-    for idx, ts_code in enumerate(ts_codes, 1):
-        try:
-            out = compute_stock_cyq(daily[daily["ts_code"] == ts_code])
-            if not out.empty:
-                buffer.append(out)
-        except Exception as exc:  # noqa: BLE001
-            failed.append(ts_code)
-            print(f"[cyq_perf_compute] {ts_code} 计算失败: {exc}")
-        if len(buffer) >= 500:
+    for batch_start in range(0, len(ts_codes), STOCK_BATCH):
+        batch = ts_codes[batch_start:batch_start + STOCK_BATCH]
+        code_set = set(batch)
+
+        daily = _load_columns_for_codes(DAILY_REL, DAILY_COLS, code_set, start, end, data_root)
+        if daily.empty:
+            processed += len(batch)
+            continue
+        basic = _load_columns_for_codes(BASIC_REL, BASIC_COLS, code_set, start, end, data_root)
+
+        daily["trade_date"] = pd.to_datetime(daily["trade_date"])
+        if not basic.empty:
+            basic["trade_date"] = pd.to_datetime(basic["trade_date"])
+            daily = daily.merge(
+                basic[["ts_code", "trade_date", "turnover_rate"]],
+                on=["ts_code", "trade_date"], how="left",
+            )
+        else:
+            daily["turnover_rate"] = np.nan
+        del basic
+
+        buffer = []
+        for ts_code in batch:
+            try:
+                out = compute_stock_cyq(daily[daily["ts_code"] == ts_code])
+                if not out.empty:
+                    buffer.append(out)
+            except Exception as exc:  # noqa: BLE001
+                failed.append(ts_code)
+                print(f"[cyq_perf_compute] {ts_code} 计算失败: {exc}")
+        if buffer:
             total_saved += merge_save(pd.concat(buffer, ignore_index=True))
-            buffer.clear()
-            print(f"[cyq_perf_compute] 进度 {idx}/{len(ts_codes)}，累计写入 {total_saved}，"
-                  f"耗时 {time.time() - t0:.0f}s", flush=True)
-    if buffer:
-        total_saved += merge_save(pd.concat(buffer, ignore_index=True))
+        processed += len(batch)
+        del daily, buffer
+        gc.collect()
+        print(f"[cyq_perf_compute] 进度 {processed}/{len(ts_codes)}，累计写入 {total_saved}，"
+              f"耗时 {time.time() - t0:.0f}s", flush=True)
 
     print(f"[cyq_perf_compute] 完成：total_upsert={total_saved}，失败 {len(failed)} 只")
     return 1 if failed else 0
