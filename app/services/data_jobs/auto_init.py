@@ -8,8 +8,9 @@
 - plan_init_jobs：纯函数，缺失/空资产 → 按依赖序的任务链；
 - run_auto_init：串行编排，submit 后轮询终态再提下一个（控制取数频次，
   任何时刻只有一个任务在跑），失败即中断，他处在跑同类型任务时礼让；
-- AutoInitScheduler：进程内轻量调度线程，每天到点（默认 02:30）检查一次，
-  资产齐全时零 API 调用；状态落盘保证重启当天不重复跑。
+  原始日频表按断档回补，股票清单/财务三表/宽表/因子值每晚例行刷新；
+- AutoInitScheduler：进程内轻量调度线程，每天到点（默认 02:30）检查一次；
+  状态落盘保证重启当天不重复跑。
 
 只在 run.py 主进程启动（start_auto_init），不挂 create_app——
 数据任务线程会调 create_app，挂那里会繁殖调度线程。
@@ -50,6 +51,18 @@ DAILY_GAP_JOB_CHAIN: Tuple[Tuple[str, str], ...] = (
     ("stk_factor/daily", "adj_factor_baostock"),
     ("moneyflow/daily", "moneyflow_tdx"),
     ("cyq_perf/daily", "cyq_perf_compute"),
+)
+
+# 每晚例行刷新的非分区/派生数据。原始日频表只在断档时回补，而这些任务
+# 没有统一的 Hive 分区可供 find_stale_daily_tables 检查，必须显式纳入链路：
+# - 股票清单：发现新上市代码；财务三表：脚本内部按报告期跳过已覆盖数据；
+# - 两个宽表与因子值：上游日频数据更新后同步刷新，不能只在文件缺失时构建。
+NIGHTLY_MAINTENANCE_JOB_CHAIN: Tuple[str, ...] = (
+    "stock_basic_fuyao",
+    "financial_fuyao",
+    "wide_table_builder",
+    "factor_compute",
+    "text2sql_wide_table",
 )
 
 # 盘后数据就绪时间（与 wide_table_status.CUTOFF_HOUR 同口径）：
@@ -184,10 +197,15 @@ def run_auto_init(
             logger.info(f"[auto-init] 日频断档: {stale}，追加回补作业: {gap_jobs}")
             jobs = jobs + gap_jobs
 
+    maintenance_jobs = [j for j in NIGHTLY_MAINTENANCE_JOB_CHAIN if j not in jobs]
+    if maintenance_jobs:
+        logger.info(f"[auto-init] 追加每晚例行刷新: {maintenance_jobs}")
+        jobs = jobs + maintenance_jobs
+
     if not jobs:
         return {"status": "ok", "completed": []}
 
-    logger.info(f"[auto-init] 缺失资产: {missing + empty}，补齐链: {jobs}")
+    logger.info(f"[auto-init] 缺失资产: {missing + empty}，执行任务链: {jobs}")
     completed: List[str] = []
     for job_type in jobs:
         try:

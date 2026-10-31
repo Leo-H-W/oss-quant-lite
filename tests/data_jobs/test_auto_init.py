@@ -152,12 +152,19 @@ def _missing_wide_table_inspect():
     return True, existing, existing
 
 
-def test_run_auto_init_noop_when_healthy():
+def test_run_auto_init_runs_nightly_maintenance_when_healthy():
     service = _FakeService()
     result = run_auto_init(service, _healthy_inspect, sleep=lambda _: None)
 
-    assert result["status"] == "ok"
-    assert service.submitted == []
+    assert result["status"] == "success"
+    assert service.submitted == [
+        "stock_basic_fuyao",
+        "financial_fuyao",
+        "wide_table_builder",
+        "factor_compute",
+        "text2sql_wide_table",
+    ]
+    assert result["completed"] == service.submitted
 
 
 def test_run_auto_init_submits_missing_chain_in_order():
@@ -165,8 +172,25 @@ def test_run_auto_init_submits_missing_chain_in_order():
     result = run_auto_init(service, _missing_wide_table_inspect, sleep=lambda _: None)
 
     assert result["status"] == "success"
-    assert service.submitted == ["text2sql_wide_table"]
-    assert result["completed"] == ["text2sql_wide_table"]
+    assert service.submitted == [
+        "text2sql_wide_table",
+        "stock_basic_fuyao",
+        "financial_fuyao",
+        "wide_table_builder",
+        "factor_compute",
+    ]
+    assert result["completed"] == service.submitted
+
+
+def test_run_auto_init_nightly_failure_interrupts_derived_chain():
+    service = _FakeService(fail_on="wide_table_builder")
+    result = run_auto_init(service, _healthy_inspect, sleep=lambda _: None)
+
+    assert result["status"] == "failed"
+    assert result["failed_job"] == "wide_table_builder"
+    assert service.submitted == [
+        "stock_basic_fuyao", "financial_fuyao", "wide_table_builder",
+    ]
 
 
 def test_run_auto_init_stops_chain_on_failure():
@@ -354,11 +378,18 @@ def test_run_auto_init_gap_fill_runs_when_assets_healthy():
     )
 
     assert result["status"] == "success"
-    assert service.submitted == ["daily_history_by_date"]
-    assert result["completed"] == ["daily_history_by_date"]
+    assert service.submitted == [
+        "daily_history_by_date",
+        "stock_basic_fuyao",
+        "financial_fuyao",
+        "wide_table_builder",
+        "factor_compute",
+        "text2sql_wide_table",
+    ]
+    assert result["completed"] == service.submitted
 
 
-def test_run_auto_init_no_gap_jobs_when_fresh():
+def test_run_auto_init_no_raw_gap_jobs_when_fresh():
     service = _FakeService()
     result = run_auto_init(
         service,
@@ -367,8 +398,10 @@ def test_run_auto_init_no_gap_jobs_when_fresh():
         sleep=lambda _: None,
     )
 
-    assert result["status"] == "ok"
-    assert service.submitted == []
+    assert result["status"] == "success"
+    assert "daily_history_by_date" not in service.submitted
+    assert "daily_basic_baostock" not in service.submitted
+    assert service.submitted[-2:] == ["factor_compute", "text2sql_wide_table"]
 
 
 def test_run_auto_init_gap_fill_failure_interrupts():
@@ -397,4 +430,12 @@ def test_run_auto_init_dedupes_gap_job_already_in_asset_chain():
     )
 
     assert result["status"] == "success"
-    assert service.submitted == ["daily_history_by_date"]
+    assert service.submitted[0] == "daily_history_by_date"
+    assert service.submitted.count("daily_history_by_date") == 1
+    assert service.submitted[1:] == [
+        "stock_basic_fuyao",
+        "financial_fuyao",
+        "wide_table_builder",
+        "factor_compute",
+        "text2sql_wide_table",
+    ]

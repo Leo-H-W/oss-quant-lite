@@ -28,7 +28,7 @@
 | 数据任务重试 API 合约 | tests/api/test_data_jobs_retry_api.py | module_data_jobs |
 | 数据任务删除 API 合约 | tests/api/test_data_jobs_delete_api.py | module_data_jobs |
 | 任务进度页重试入口合约 | tests/ui/test_data_jobs_ui_retry_contract.py | module_data_jobs |
-| 夜间自动初始化合约 | tests/data_jobs/test_auto_init.py | module_data_jobs |
+| 夜间自动初始化与分类例行刷新合约（股票清单/财务三表/宽表/因子值） | tests/data_jobs/test_auto_init.py | module_data_jobs |
 | 夜间断档感知合约（日频表分区日期 vs 交易日历） | tests/data_jobs/test_auto_init.py | module_data_jobs |
 | 任务健康度报告合约（孤儿/失败/心跳/断档/分区完整度五项检查） | tests/data_jobs/test_health.py | module_data_jobs |
 | 健康度自动修复合约（收割孤儿 + 断档回补提交） | tests/data_jobs/test_health.py | module_data_jobs |
