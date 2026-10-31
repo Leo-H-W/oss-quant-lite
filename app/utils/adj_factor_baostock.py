@@ -38,11 +38,17 @@ from app.utils.parquet_job_helpers import (  # noqa: E402
     existing_partition_dates,
     normalize_ymd,
 )
+from app.utils.job_checkpoint import (  # noqa: E402
+    clear_checkpoint,
+    load_checkpoint,
+    save_checkpoint,
+)
 from app.utils.parquet_writer import save_to_parquet  # noqa: E402
 
 REL_TABLE = "stk_factor/daily"
 CHUNK_STOCKS = 500
 REQUEST_INTERVAL = 0.05
+CHECKPOINT_ROOT = _PROJECT_ROOT / "data" / "data_job_state" / "checkpoints"
 
 
 def resolve_date_range() -> tuple:
@@ -163,9 +169,19 @@ def main() -> int:
         print(f"[adj_factor_baostock] baostock 登录失败: {lg.error_msg}")
         return 1
 
+    checkpoint_path = CHECKPOINT_ROOT / f"adj_factor_baostock_{start}_{end}.json"
+    checkpoint = load_checkpoint(checkpoint_path)
+    completed = set(
+        checkpoint.get("completed_ts_codes", [])
+        if checkpoint.get("start") == start and checkpoint.get("end") == end else []
+    )
+    if completed:
+        print(f"[adj_factor_baostock] 从检查点续跑：已完成 {len(completed)}/{len(ts_codes)} 只")
+
     total_saved = 0
     failed = []
     buffer = []
+    pending_codes = []
 
     def relogin():
         try:
@@ -176,15 +192,35 @@ def main() -> int:
         if lg2.error_code != "0":
             raise RuntimeError(f"baostock 重登录失败: {lg2.error_msg}")
 
+    def flush():
+        nonlocal total_saved
+        if not pending_codes:
+            return
+        if buffer:
+            total_saved += merge_save(pd.concat(buffer, ignore_index=True))
+        completed.update(pending_codes)
+        save_checkpoint(checkpoint_path, {
+            "version": 1,
+            "start": start,
+            "end": end,
+            "completed_ts_codes": sorted(completed),
+        })
+        buffer.clear()
+        pending_codes.clear()
+
     try:
         for idx, ts_code in enumerate(ts_codes, 1):
+            if ts_code in completed:
+                continue
             try:
                 stock_daily = daily[daily["ts_code"] == ts_code]
                 if stock_daily.empty:
+                    pending_codes.append(ts_code)
                     continue
                 with _watchdog(FETCH_TIMEOUT):
                     events = fetch_adjust_events(bs, ts_code)
                 buffer.append(build_daily_adj(stock_daily, events))
+                pending_codes.append(ts_code)
             except Exception as exc:  # noqa: BLE001
                 failed.append(ts_code)
                 print(f"[adj_factor_baostock] {ts_code} 处理失败: {exc}", flush=True)
@@ -195,19 +231,18 @@ def main() -> int:
                     raise
             time.sleep(REQUEST_INTERVAL)
 
-            if len(buffer) >= CHUNK_STOCKS:
-                total_saved += merge_save(pd.concat(buffer, ignore_index=True))
-                buffer.clear()
+            if len(pending_codes) >= CHUNK_STOCKS:
+                flush()
                 print(f"[adj_factor_baostock] 进度 {idx}/{len(ts_codes)}，累计写入 {total_saved}", flush=True)
     finally:
-        if buffer:
-            total_saved += merge_save(pd.concat(buffer, ignore_index=True))
+        flush()
         bs.logout()
 
     print(f"[adj_factor_baostock] 完成：total_upsert={total_saved}，失败 {len(failed)} 只")
     if failed:
         print(f"[adj_factor_baostock] 失败标的: {failed[:20]}{'...' if len(failed) > 20 else ''}")
         return 1
+    clear_checkpoint(checkpoint_path)
     return 0
 
 

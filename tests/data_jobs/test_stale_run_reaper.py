@@ -51,3 +51,19 @@ def test_reap_stale_runs_handles_pending_without_started_at(monkeypatch, tmp_pat
 
     assert [r.id for r in reaped] == [run.id]
     assert store.get_run(run.id).status == "failed"
+
+
+def test_reap_stale_runs_never_reaps_registered_active_run(monkeypatch, tmp_path):
+    """自动重试会让同一 run 存活超过单次脚本超时，活跃线程不得被误判僵尸。"""
+    store = ParquetDataJobStateStore(base_dir=str(tmp_path / "state"))
+    run = _create_running_run(store, "daily_basic_baostock")
+
+    real_now = pjss.now_local
+    monkeypatch.setattr(pjss, "now_local", lambda: real_now() + __import__("datetime").timedelta(hours=3))
+
+    reaped = store.reap_stale_runs(
+        timeout_seconds=3600, is_active=lambda run_id: run_id == run.id
+    )
+
+    assert reaped == []
+    assert store.get_run(run.id).status == "running"

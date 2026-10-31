@@ -34,6 +34,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.utils.parquet_job_helpers import normalize_ymd  # noqa: E402
+from app.utils.job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint  # noqa: E402
 from app.utils.parquet_writer import save_to_parquet  # noqa: E402
 
 REL_TABLE = "cyq_perf/daily"
@@ -249,16 +250,38 @@ def main() -> int:
     print(f"[cyq_perf_compute] 区间 {start}~{end}，标的 {len(ts_codes)} 只，"
           f"bins={BIN_COUNT}，批大小 {STOCK_BATCH}", flush=True)
 
+    checkpoint_path = plan_checkpoint_path(
+        os.path.join(data_root, "data_job_state", "checkpoints"),
+        "cyq_perf_compute",
+        {"start": start, "end": end, "ts_codes": ts_codes},
+    )
+    checkpoint = load_checkpoint(checkpoint_path)
+    completed = set(
+        checkpoint.get("completed_ts_codes", [])
+        if checkpoint.get("start") == start and checkpoint.get("end") == end else []
+    )
+    if completed:
+        print(f"[cyq_perf_compute] 从检查点续跑：{len(completed)}/{len(ts_codes)}")
+
     total_saved = 0
     failed = []
     processed = 0
     t0 = time.time()
     for batch_start in range(0, len(ts_codes), STOCK_BATCH):
         batch = ts_codes[batch_start:batch_start + STOCK_BATCH]
-        code_set = set(batch)
+        remaining = [code for code in batch if code not in completed]
+        if not remaining:
+            processed += len(batch)
+            continue
+        code_set = set(remaining)
 
         daily = _load_columns_for_codes(DAILY_REL, DAILY_COLS, code_set, start, end, data_root)
         if daily.empty:
+            completed.update(remaining)
+            save_checkpoint(checkpoint_path, {
+                "version": 1, "start": start, "end": end,
+                "completed_ts_codes": sorted(completed),
+            })
             processed += len(batch)
             continue
         basic = _load_columns_for_codes(BASIC_REL, BASIC_COLS, code_set, start, end, data_root)
@@ -275,9 +298,11 @@ def main() -> int:
         del basic
 
         buffer = []
-        for ts_code in batch:
+        batch_completed = []
+        for ts_code in remaining:
             try:
                 out = compute_stock_cyq(daily[daily["ts_code"] == ts_code])
+                batch_completed.append(ts_code)
                 if not out.empty:
                     buffer.append(out)
             except Exception as exc:  # noqa: BLE001
@@ -285,6 +310,11 @@ def main() -> int:
                 print(f"[cyq_perf_compute] {ts_code} 计算失败: {exc}")
         if buffer:
             total_saved += merge_save(pd.concat(buffer, ignore_index=True))
+        completed.update(batch_completed)
+        save_checkpoint(checkpoint_path, {
+            "version": 1, "start": start, "end": end,
+            "completed_ts_codes": sorted(completed),
+        })
         processed += len(batch)
         del daily, buffer
         gc.collect()
@@ -292,7 +322,10 @@ def main() -> int:
               f"耗时 {time.time() - t0:.0f}s", flush=True)
 
     print(f"[cyq_perf_compute] 完成：total_upsert={total_saved}，失败 {len(failed)} 只")
-    return 1 if failed else 0
+    if failed:
+        return 1
+    clear_checkpoint(checkpoint_path)
+    return 0
 
 
 if __name__ == "__main__":

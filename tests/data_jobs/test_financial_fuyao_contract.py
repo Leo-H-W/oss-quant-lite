@@ -115,6 +115,7 @@ def test_financial_main_skips_when_local_covers_expected(monkeypatch, tmp_path, 
     client = _FakeFuyaoClient({})
     monkeypatch.setattr(financial_fuyao, "FuyaoClient", lambda: client)
     monkeypatch.setattr(financial_fuyao, "all_stock_codes", lambda client=None: ["600000.SH"])
+    monkeypatch.setattr(financial_fuyao, "expected_latest_period", lambda today=None: "20260630")
 
     exit_code = financial_fuyao.main()
 

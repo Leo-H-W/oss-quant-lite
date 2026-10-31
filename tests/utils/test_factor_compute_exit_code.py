@@ -22,7 +22,8 @@ class _FakeEngine:
 
 
 @pytest.fixture(autouse=True)
-def _single_trade_date(monkeypatch):
+def _single_trade_date(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_JOB_TRADE_DATE", "20260601")
     monkeypatch.delenv("DATA_JOB_START_DATE", raising=False)
     monkeypatch.delenv("DATA_JOB_END_DATE", raising=False)

@@ -8,6 +8,12 @@ import pandas as pd
 from loguru import logger
 
 from app.services.data_reader import ParquetDataReader
+from app.utils.job_checkpoint import (
+    clear_checkpoint,
+    load_checkpoint,
+    plan_checkpoint_path,
+    save_checkpoint,
+)
 from app.utils.parquet_writer import save_partitioned_parquet
 
 
@@ -264,18 +270,40 @@ class DailyFetchJob:
             print(f"[{self.job_name}] 没有需要拉取的交易日")
             return 0
 
+        checkpoint_path = plan_checkpoint_path(
+            os.path.join(_default_data_root(), "data_job_state", "checkpoints"),
+            self.job_name,
+            {"rel_table": self.rel_table, "trade_dates": trade_dates},
+        )
+        checkpoint = load_checkpoint(checkpoint_path)
+        completed_dates = set(
+            checkpoint.get("completed_trade_dates", [])
+            if checkpoint.get("planned_trade_dates") == trade_dates else []
+        )
+        if completed_dates:
+            print(f"[{self.job_name}] 从检查点续跑，已完成 {len(completed_dates)} 个交易日")
+
         total_saved = 0
         failed_dates: List[str] = []
         for trade_date in trade_dates:
+            if trade_date in completed_dates:
+                continue
             print(f"[{self.job_name}] trade_date={trade_date}")
             df = self._fetch_with_retry(trade_date)
             if df is None:
                 failed_dates.append(trade_date)
                 continue
             total_saved += save_partitioned_parquet(df, "trade_date", self.rel_table)
+            completed_dates.add(trade_date)
+            save_checkpoint(checkpoint_path, {
+                "version": 1,
+                "planned_trade_dates": trade_dates,
+                "completed_trade_dates": sorted(completed_dates),
+            })
 
         print(f"[{self.job_name}] 完成，trade_days={len(trade_dates)}, total_upsert={total_saved}")
         if failed_dates:
             print(f"[{self.job_name}] 以下交易日重试后仍失败: {failed_dates}")
             sys.exit(1)
+        clear_checkpoint(checkpoint_path)
         return total_saved

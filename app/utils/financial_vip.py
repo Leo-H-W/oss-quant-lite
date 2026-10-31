@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 from job_env import env_bool, normalize_ymd
+from job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint
 from parquet_job_helpers import latest_partition_date
 from parquet_writer import save_partitioned_parquet
 
@@ -79,11 +80,36 @@ def run_financial_vip_job(api_name: str, table: str, fields: List[str]) -> None:
     if api is None:
         raise ValueError(f"当前 Tushare 客户端不支持 {api_name} 接口")
 
+    checkpoint_path = plan_checkpoint_path(
+        os.path.join(
+            os.getenv("DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")),
+            "data_job_state", "checkpoints",
+        ),
+        table,
+        {"periods": periods},
+    )
+    checkpoint = load_checkpoint(checkpoint_path)
+    completed_periods = set(
+        checkpoint.get("completed_periods", [])
+        if checkpoint.get("planned_periods") == periods else []
+    )
+    if completed_periods:
+        print(f"[{table}] 从检查点续跑，已完成 {len(completed_periods)} 个报告期")
+
     total_saved = 0
     for period in periods:
+        if period in completed_periods:
+            continue
         df = _fetch_period(api, api_name, period, fields)
         rows = 0 if df is None or df.empty else len(df)
         total_saved += save_partitioned_parquet(df, "end_date", table)
+        completed_periods.add(period)
+        save_checkpoint(checkpoint_path, {
+            "version": 1,
+            "planned_periods": periods,
+            "completed_periods": sorted(completed_periods),
+        })
         print(f"[{table}] period={period} rows={rows}")
 
+    clear_checkpoint(checkpoint_path)
     print(f"[{table}] 完成，periods={periods}, total_upsert={total_saved}")

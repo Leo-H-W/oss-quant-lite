@@ -1,10 +1,13 @@
+import os
+import time
+
 from loguru import logger
 
 from app import create_app
 from app.celery_app import celery
 from app.services.data_jobs.parquet_state_store import ParquetDataJobStateStore
 from app.services.data_jobs.registry import JobRegistry
-from app.services.data_jobs.runner import ScriptRunner
+from app.services.data_jobs.runner import ScriptRunner, get_retry_policy
 
 
 # ---------------------------------------------------------------------------
@@ -101,25 +104,62 @@ def _run_data_job(run_id: int):
             if snapshot_tag:
                 runner_params.setdefault("snapshot_tag", snapshot_tag)
 
-            completed = runner.run_script(definition.script_path, params=runner_params)
-            run.result_json = {
-                "returncode": completed.returncode,
-                "stdout": completed.stdout[-4000:] if completed.stdout else "",
-                "stderr": completed.stderr[-4000:] if completed.stderr else "",
-            }
+            policy = get_retry_policy()
+            attempts = []
+            for attempt in range(1, policy.max_attempts + 1):
+                latest = store.get_run(run_id)
+                if latest is not None and latest.status == "cancelled":
+                    return {"run_id": run_id, "status": "cancelled", "attempt": attempt - 1}
+                if attempt > 1:
+                    store.update_run_status(
+                        run, "running", progress=5.0,
+                        progress_message=f"开始第 {attempt}/{policy.max_attempts} 次尝试（从检查点续跑）",
+                    )
+                completed = runner.run_script(definition.script_path, params=runner_params)
+                latest = store.get_run(run_id)
+                if latest is not None and latest.status == "cancelled":
+                    return {"run_id": run_id, "status": "cancelled", "attempt": attempt}
+                attempts.append({
+                    "attempt": attempt,
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout[-4000:] if completed.stdout else "",
+                    "stderr": completed.stderr[-4000:] if completed.stderr else "",
+                })
+                run.result_json = {
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout[-4000:] if completed.stdout else "",
+                    "stderr": completed.stderr[-4000:] if completed.stderr else "",
+                    "attempt": attempt,
+                    "worker_pid": os.getpid(),
+                    "max_attempts": policy.max_attempts,
+                    "attempts": attempts,
+                }
 
-            if completed.returncode == 0:
-                store.update_run_status(run, "success", progress=100.0, progress_message="任务执行完成")
-                # 大宽表构建成功后清除缓存，使后续请求读取新数据
-                if run.job_type == "wide_table_builder":
-                    from app.services.data_reader import ParquetDataReader
-                    ParquetDataReader.invalidate_stock_business_cache()
-                    # 同时清除 text2sql 的 SQLite 临时表缓存
-                    from app.services.text2sql_engine import get_text2sql_engine
-                    engine = get_text2sql_engine()
-                    engine.query_executor.invalidate_cache()
-                store.save_run(run)
-                return {"run_id": run_id, "status": "success"}
+                if completed.returncode == 0:
+                    store.update_run_status(run, "success", progress=100.0, progress_message="任务执行完成")
+                    # 大宽表构建成功后清除缓存，使后续请求读取新数据
+                    if run.job_type == "wide_table_builder":
+                        from app.services.data_reader import ParquetDataReader
+                        ParquetDataReader.invalidate_stock_business_cache()
+                        # 同时清除 text2sql 的 SQLite 临时表缓存
+                        from app.services.text2sql_engine import get_text2sql_engine
+                        engine = get_text2sql_engine()
+                        engine.query_executor.invalidate_cache()
+                    store.save_run(run)
+                    return {"run_id": run_id, "status": "success", "attempt": attempt}
+
+                if attempt < policy.max_attempts:
+                    delay = policy.delay_after(attempt)
+                    store.update_run_status(
+                        run, "running", progress=5.0,
+                        progress_message=(
+                            f"第 {attempt}/{policy.max_attempts} 次尝试失败，"
+                            f"{delay:g} 秒后自动重试"
+                        ),
+                    )
+                    store.save_run(run)
+                    if delay:
+                        time.sleep(delay)
 
             run.error_message = completed.stderr[-1000:] if completed.stderr else "task failed"
             store.update_run_status(
@@ -127,10 +167,15 @@ def _run_data_job(run_id: int):
                 "failed",
                 progress=100.0,
                 error_message=run.error_message,
-                progress_message="任务执行失败",
+                progress_message=f"任务执行失败（已尝试 {policy.max_attempts} 次）",
             )
             store.save_run(run)
-            return {"run_id": run_id, "status": "failed", "error": run.error_message}
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error": run.error_message,
+                "attempt": policy.max_attempts,
+            }
 
         except Exception as exc:  # noqa: BLE001 - 任务入口必须兜底，保证状态落盘
             try:

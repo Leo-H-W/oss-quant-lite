@@ -10,6 +10,7 @@ Parquet 表、同一套 schema，两者是同表的可选生产者，读取侧�
     DATA_JOB_TRADE_DATE=20260904 python app/utils/daily_history_fuyao.py
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -20,10 +21,12 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.utils.data_sources.fuyao_dump import FuyaoDailyFetcher
+from app.utils.job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint
 from app.utils.parquet_job_helpers import resolve_trade_dates_with_gap_fill
 from app.utils.parquet_writer import save_to_parquet
 
 REL_TABLE = "daily_history/daily"
+DATE_CHUNK_SIZE = 10
 
 
 def main() -> int:
@@ -32,17 +35,43 @@ def main() -> int:
         print("[daily_history_fuyao] 没有需要拉取的交易日")
         return 0
 
-    fetcher = FuyaoDailyFetcher()
-    frames = fetcher.fetch_dates(trade_dates)
+    checkpoint_path = plan_checkpoint_path(
+        os.path.join(
+            os.getenv("DATA_DIR", str(_PROJECT_ROOT / "data")),
+            "data_job_state", "checkpoints",
+        ),
+        "daily_history_fuyao",
+        {"trade_dates": trade_dates},
+    )
+    checkpoint = load_checkpoint(checkpoint_path)
+    completed = set(
+        checkpoint.get("completed_trade_dates", [])
+        if checkpoint.get("planned_trade_dates") == trade_dates else []
+    )
+    if completed:
+        print(f"[daily_history_fuyao] 从检查点续跑，已完成 {len(completed)} 个交易日")
 
+    fetcher = FuyaoDailyFetcher()
     total = 0
     failed = []
-    for trade_date in trade_dates:
-        frame = frames.get(trade_date)
-        if frame is None or frame.empty:
-            failed.append(trade_date)
+    for chunk_start in range(0, len(trade_dates), DATE_CHUNK_SIZE):
+        chunk = trade_dates[chunk_start:chunk_start + DATE_CHUNK_SIZE]
+        pending = [date for date in chunk if date not in completed]
+        if not pending:
             continue
-        total += save_to_parquet(frame, trade_date, REL_TABLE)
+        frames = fetcher.fetch_dates(pending)
+        for trade_date in pending:
+            frame = frames.get(trade_date)
+            if frame is None or frame.empty:
+                failed.append(trade_date)
+                continue
+            total += save_to_parquet(frame, trade_date, REL_TABLE)
+            completed.add(trade_date)
+            save_checkpoint(checkpoint_path, {
+                "version": 1,
+                "planned_trade_dates": trade_dates,
+                "completed_trade_dates": sorted(completed),
+            })
 
     saved_days = len(trade_dates) - len(failed)
     print(
@@ -52,6 +81,7 @@ def main() -> int:
     if failed:
         print(f"[daily_history_fuyao] 以下交易日未取得数据（作业标记失败，可重试）: {failed}")
         return 1
+    clear_checkpoint(checkpoint_path)
     return 0
 
 

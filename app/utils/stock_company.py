@@ -19,14 +19,13 @@ def main():
             part = pro.stock_company(exchange=exchange, fields=FIELDS)
         except Exception as exc:
             print(f"[stock_company] 下载 exchange={exchange} 失败: {exc}")
-            continue
+            raise  # 保留旧快照，完整交易所数据由下次自动重试获取
         if part is not None and not part.empty:
             print(f"[stock_company] exchange={exchange}: {len(part)} 条")
             frames.append(part)
 
     if not frames:
-        print("[stock_company] 没有获取到公司资料，跳过写入。")
-        return
+        raise RuntimeError("[stock_company] 没有获取到公司资料，作业标记失败")
 
     df = pd.concat(frames, ignore_index=True).drop_duplicates(subset="ts_code", keep="first")
     save_single_parquet(df, "stock_company.parquet")

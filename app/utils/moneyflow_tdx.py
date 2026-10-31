@@ -28,11 +28,19 @@ from app.utils.parquet_job_helpers import (  # noqa: E402
     available_open_trade_dates,
     normalize_ymd,
 )
+from app.utils.job_checkpoint import (  # noqa: E402
+    clear_checkpoint,
+    load_checkpoint,
+    plan_checkpoint_path,
+    save_checkpoint,
+)
 from app.utils.parquet_writer import save_to_parquet  # noqa: E402
 
 REL_TABLE = "moneyflow/daily"
 PAGE_SIZE = 800
 PAGE_INTERVAL = 0.05
+CHUNK_STOCKS = 200
+CHECKPOINT_ROOT = _PROJECT_ROOT / "data" / "data_job_state" / "checkpoints"
 # 单笔成交金额分档阈值（元），tushare 口径
 BUCKETS = (("sm", 0, 50_000), ("md", 50_000, 200_000),
            ("lg", 200_000, 1_000_000), ("elg", 1_000_000, float("inf")))
@@ -160,14 +168,46 @@ def main() -> int:
     api = create_hq_api()
     connect_first_available(api)
 
+    checkpoint_path = plan_checkpoint_path(
+        CHECKPOINT_ROOT,
+        "moneyflow_tdx",
+        {"trade_date": trade_date, "ts_codes": ts_codes},
+    )
+    checkpoint = load_checkpoint(checkpoint_path)
+    completed = set(
+        checkpoint.get("completed_ts_codes", [])
+        if checkpoint.get("trade_date") == trade_date else []
+    )
+    if completed:
+        print(f"[moneyflow_tdx] 从检查点续跑：已完成 {len(completed)}/{len(ts_codes)} 只")
+
     rows = []
+    pending_codes = []
     failed = []
     total_saved = 0
     t0 = time.time()
+
+    def flush():
+        nonlocal total_saved
+        if not pending_codes:
+            return
+        total_saved += merge_save(rows, trade_date)
+        completed.update(pending_codes)
+        save_checkpoint(checkpoint_path, {
+            "version": 1,
+            "trade_date": trade_date,
+            "completed_ts_codes": sorted(completed),
+        })
+        rows.clear()
+        pending_codes.clear()
+
     try:
         for idx, ts_code in enumerate(ts_codes, 1):
+            if ts_code in completed:
+                continue
             try:
                 rows.append(aggregate_stock(api, ts_code, date_int))
+                pending_codes.append(ts_code)
             except Exception as exc:  # noqa: BLE001 - 断线重连后重试一次
                 try:
                     api.disconnect()
@@ -177,24 +217,26 @@ def main() -> int:
                 connect_first_available(api)
                 try:
                     rows.append(aggregate_stock(api, ts_code, date_int))
+                    pending_codes.append(ts_code)
                 except Exception as exc2:  # noqa: BLE001
                     failed.append(ts_code)
                     print(f"[moneyflow_tdx] {ts_code} 拉取失败: {exc2}", flush=True)
-            if len(rows) >= 200:
-                total_saved += merge_save(rows, trade_date)
-                rows.clear()
+            if len(pending_codes) >= CHUNK_STOCKS:
+                flush()
                 print(f"[moneyflow_tdx] 进度 {idx}/{len(ts_codes)}，累计写入 {total_saved}，"
                       f"耗时 {time.time() - t0:.0f}s", flush=True)
     finally:
-        if rows:
-            total_saved += merge_save(rows, trade_date)
+        flush()
         try:
             api.disconnect()
         except Exception:  # noqa: BLE001
             pass
 
     print(f"[moneyflow_tdx] 完成：total_upsert={total_saved}，失败 {len(failed)} 只")
-    return 1 if failed else 0
+    if failed:
+        return 1
+    clear_checkpoint(checkpoint_path)
+    return 0
 
 
 if __name__ == "__main__":

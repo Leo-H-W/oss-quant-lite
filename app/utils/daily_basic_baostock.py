@@ -24,6 +24,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from app.utils.job_checkpoint import (  # noqa: E402
+    clear_checkpoint,
+    load_checkpoint,
+    save_checkpoint,
+)
 from app.utils.parquet_job_helpers import (  # noqa: E402
     existing_partition_dates,
     normalize_ymd,
@@ -31,9 +36,10 @@ from app.utils.parquet_job_helpers import (  # noqa: E402
 from app.utils.parquet_writer import save_to_parquet  # noqa: E402
 
 REL_TABLE = "daily_basic/daily"
-CHUNK_STOCKS = 500
+CHUNK_STOCKS = 100
 REQUEST_INTERVAL = 0.05  # baostock 限频宽松，礼节性间隔
 FETCH_TIMEOUT = 30  # baostock socket 无超时，断流会永久阻塞，须看门狗
+CHECKPOINT_ROOT = _PROJECT_ROOT / "data" / "data_job_state" / "checkpoints"
 
 
 class FetchTimeout(Exception):
@@ -179,9 +185,24 @@ def main() -> int:
         print(f"[daily_basic_baostock] baostock 登录失败: {lg.error_msg}")
         return 1
 
+    checkpoint_path = CHECKPOINT_ROOT / f"daily_basic_baostock_{start}_{end}.json"
+    checkpoint = load_checkpoint(checkpoint_path)
+    if checkpoint.get("start") == start and checkpoint.get("end") == end:
+        completed = {
+            str(code) for code in checkpoint.get("completed_ts_codes", [])
+        }
+    else:
+        completed = set()
+    if completed:
+        print(
+            f"[daily_basic_baostock] 从检查点续跑：已完成 {len(completed)}/{len(ts_codes)} 只",
+            flush=True,
+        )
+
     total_saved = 0
     failed = []
     buffer = []
+    pending_codes = []
 
     def relogin():
         try:
@@ -192,11 +213,31 @@ def main() -> int:
         if lg2.error_code != "0":
             raise RuntimeError(f"baostock 重登录失败: {lg2.error_msg}")
 
+    def flush():
+        """先落行情分区，再原子推进检查点；失败股票不进入 pending_codes。"""
+        nonlocal total_saved
+        if not pending_codes:
+            return
+        if buffer:
+            total_saved += merge_save(pd.concat(buffer, ignore_index=True))
+        completed.update(pending_codes)
+        save_checkpoint(checkpoint_path, {
+            "version": 1,
+            "start": start,
+            "end": end,
+            "completed_ts_codes": sorted(completed),
+        })
+        buffer.clear()
+        pending_codes.clear()
+
     try:
         for idx, ts_code in enumerate(ts_codes, 1):
+            if ts_code in completed:
+                continue
             try:
                 with _watchdog(FETCH_TIMEOUT):
                     df = fetch_stock(bs, ts_code, start, end)
+                pending_codes.append(ts_code)
                 if not df.empty:
                     buffer.append(df)
             except Exception as exc:  # noqa: BLE001 - 单股失败不阻断全市场
@@ -210,19 +251,18 @@ def main() -> int:
                     raise
             time.sleep(REQUEST_INTERVAL)
 
-            if len(buffer) >= CHUNK_STOCKS:
-                total_saved += merge_save(pd.concat(buffer, ignore_index=True))
-                buffer.clear()
+            if len(pending_codes) >= CHUNK_STOCKS:
+                flush()
                 print(f"[daily_basic_baostock] 进度 {idx}/{len(ts_codes)}，累计写入 {total_saved}", flush=True)
     finally:
-        if buffer:
-            total_saved += merge_save(pd.concat(buffer, ignore_index=True))
+        flush()
         bs.logout()
 
     print(f"[daily_basic_baostock] 完成：total_upsert={total_saved}，失败 {len(failed)} 只")
     if failed:
         print(f"[daily_basic_baostock] 失败标的: {failed[:20]}{'...' if len(failed) > 20 else ''}")
         return 1
+    clear_checkpoint(checkpoint_path)
     return 0
 
 
