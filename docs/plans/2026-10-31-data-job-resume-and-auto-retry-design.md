@@ -51,9 +51,11 @@
 
 - `python data-gather.py status`：输出各数据资产范围及活动同步 run；`help/status`
   不提前导入 Flask。
-- `python data-gather.py update [N]`：复用 auto-init 断点链；检测到活动任务时必须
-  询问，只有用户输入 `y` 才取消旧 run 并重新开始。`N` 是本次更新中**每类任务各自**
-  的重试次数；不传时保持 `.env`/默认值，结束后恢复命令行覆盖。
+- `python data-gather.py update [N]`：默认以新会话后台运行并写入
+  `logs/data-gather-update.log`，SSH 断线不影响进程；复用 auto-init 断点链。
+  检测到活动任务时在后台化之前询问，只有用户输入 `y` 才取消旧 run 并重新开始。
+  `N` 是本次更新中**每类任务各自**的重试次数；不传时保持 `.env`/默认值，
+  结束后恢复命令行覆盖。`DATA_GATHER_FOREGROUND=1` 可强制前台调试。
 - `python data-gather.py help`：输出上述用法。
 
 ### 数值软目标（里程碑 checklist）

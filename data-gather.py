@@ -46,9 +46,12 @@ HELP = """数据维护工具
   DATA_JOB_TIMEOUT                 单次脚本超时秒数（默认：3600）
   DATA_JOB_MAX_RETRIES             每类任务失败后的自动重试次数（默认：5）
   DATA_JOB_RETRY_BACKOFF_SECONDS   首次重试退避秒数（默认：60，指数退避）
+  DATA_GATHER_FOREGROUND=1         update 强制前台运行（调试用）
 
-update 复用数据任务链，按依赖顺序串行执行；已完成分区、报告期、股票批次和
-任务链节点会跳过，失败后在同一 run 内有限次自动重试。全部成功后清除检查点。
+update 默认启动脱离 SSH 会话的后台进程，日志为 logs/data-gather-update.log；
+已有任务时仍在启动前询问是否重新开始。任务链按依赖顺序串行执行，已完成分区、
+报告期、股票批次和任务链节点会跳过，失败后在同一 run 内有限次自动重试。
+全部成功后清除检查点。
 """
 
 DAILY_TABLES: Tuple[Tuple[str, str], ...] = (
@@ -346,7 +349,7 @@ def print_status(root: Path) -> None:
     print_active_runs(load_active_runs(root, process_fallback=True))
 
 
-def _run_update(root: Path, service, input_fn) -> int:
+def _confirm_active_restart(root: Path, input_fn):
     active_runs = load_active_runs(root)
     if active_runs is None:
         print(
@@ -365,6 +368,14 @@ def _run_update(root: Path, service, input_fn) -> int:
             print("保持现有任务，不重复启动更新。")
             return 0
         cancel_active_runs(root, active_runs)
+    return None
+
+
+def _run_update(root: Path, service, input_fn, skip_active_check: bool = False) -> int:
+    if not skip_active_check:
+        early_result = _confirm_active_restart(root, input_fn)
+        if early_result is not None:
+            return early_result
 
     if service is None:
         try:
@@ -434,7 +445,10 @@ def main(argv: Optional[Sequence[str]] = None, service=None, input_fn=None) -> i
         os.environ["DATA_JOB_MAX_RETRIES"] = str(retries)
 
     try:
-        return _run_update(root, service, input_fn)
+        return _run_update(
+            root, service, input_fn,
+            skip_active_check=os.environ.get("DATA_GATHER_SKIP_ACTIVE_CHECK") == "1",
+        )
     finally:
         if len(args) == 2:
             if previous_retries is None:
@@ -443,5 +457,59 @@ def main(argv: Optional[Sequence[str]] = None, service=None, input_fn=None) -> i
                 os.environ["DATA_JOB_MAX_RETRIES"] = previous_retries
 
 
+UPDATE_LOG_PATH = PROJECT_ROOT / "logs" / "data-gather-update.log"
+
+
+def launch_detached(args: Sequence[str]) -> int:
+    """启动脱离 SSH 终端会话的 update 子进程，输出追加到日志。"""
+    UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["DATA_GATHER_DETACHED"] = "1"
+    # 活动任务检查与取消已在父进程交互完成，子进程不重复询问。
+    env["DATA_GATHER_SKIP_ACTIVE_CHECK"] = "1"
+    command = [sys.executable, str(PROJECT_ROOT / "data-gather.py"), *args]
+    with UPDATE_LOG_PATH.open("a", encoding="utf-8") as log:
+        process = subprocess.Popen(
+            command,
+            cwd=str(PROJECT_ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+            env=env,
+        )
+    print(f"数据更新已在后台启动，PID={process.pid}")
+    print(f"日志：{UPDATE_LOG_PATH}")
+    print("SSH 断开后仍会继续；使用 data-gather.py status 查看任务状态。")
+    return 0
+
+
+def cli_entrypoint(argv: Optional[Sequence[str]] = None, input_fn=None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    is_update = bool(args) and args[0] == "update"
+    if (
+        not is_update
+        or os.environ.get("DATA_GATHER_DETACHED") == "1"
+        or os.environ.get("DATA_GATHER_FOREGROUND") == "1"
+    ):
+        return main(args, input_fn=input_fn)
+
+    # 参数错误在前台直接报告，不制造一个立即失败的后台进程。
+    if len(args) > 2:
+        return main(args, input_fn=input_fn)
+    if len(args) == 2:
+        try:
+            if int(args[1]) < 0:
+                raise ValueError
+        except ValueError:
+            return main(args, input_fn=input_fn)
+
+    early_result = _confirm_active_restart(_data_root(), input_fn)
+    if early_result is not None:
+        return early_result
+    return launch_detached(args)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli_entrypoint())

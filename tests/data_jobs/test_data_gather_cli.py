@@ -142,3 +142,54 @@ def test_update_rejects_invalid_retry_override(monkeypatch, tmp_path, capsys):
     assert cli.main(["update", "-1"], service=object()) == 2
     assert cli.main(["update", "abc"], service=object()) == 2
     assert "非负整数" in capsys.readouterr().err
+
+
+def test_cli_update_launches_detached_by_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DATA_GATHER_DETACHED", raising=False)
+    monkeypatch.delenv("DATA_GATHER_FOREGROUND", raising=False)
+    cli = _load_cli()
+    calls = []
+    monkeypatch.setattr(cli, "launch_detached", lambda args: calls.append(args) or 0)
+
+    assert cli.cli_entrypoint(["update", "100"]) == 0
+    assert calls == [["update", "100"]]
+
+
+def test_launch_detached_separates_session_and_redirects_output(monkeypatch, tmp_path, capsys):
+    cli = _load_cli()
+    log_path = tmp_path / "update.log"
+    monkeypatch.setattr(cli, "UPDATE_LOG_PATH", log_path, raising=False)
+    calls = []
+
+    class Process:
+        pid = 12345
+
+    def popen(args, **kwargs):
+        calls.append((args, kwargs))
+        return Process()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", popen)
+    assert cli.launch_detached(["update", "100"]) == 0
+
+    args, kwargs = calls[0]
+    assert args[-2:] == ["update", "100"]
+    assert kwargs["start_new_session"] is True
+    assert kwargs["stdin"] == cli.subprocess.DEVNULL
+    assert kwargs["env"]["DATA_GATHER_DETACHED"] == "1"
+    assert kwargs["env"]["DATA_GATHER_SKIP_ACTIVE_CHECK"] == "1"
+    output = capsys.readouterr().out
+    assert "12345" in output
+    assert str(log_path) in output
+
+
+def test_cli_active_restart_is_confirmed_before_detach(monkeypatch, tmp_path):
+    _write_runs(tmp_path)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    cli = _load_cli()
+    events = []
+    monkeypatch.setattr(cli, "cancel_active_runs", lambda *_a: events.append("cancel"))
+    monkeypatch.setattr(cli, "launch_detached", lambda _args: events.append("detach") or 0)
+
+    assert cli.cli_entrypoint(["update"], input_fn=lambda _: "y") == 0
+    assert events == ["cancel", "detach"]
