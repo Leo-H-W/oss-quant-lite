@@ -176,7 +176,11 @@ class ParquetDataJobStateStore:
             return float(cls.STALE_RUN_DEFAULT_TIMEOUT_SECONDS)
         return value if value > 0 else float(cls.STALE_RUN_DEFAULT_TIMEOUT_SECONDS)
 
-    def reap_stale_runs(self, timeout_seconds: Optional[float] = None) -> List[DataJobRunRecord]:
+    def reap_stale_runs(
+        self,
+        timeout_seconds: Optional[float] = None,
+        is_active: Optional[Callable[[int], bool]] = None,
+    ) -> List[DataJobRunRecord]:
         """把长期停留在 pending/queued/running 的僵尸 run 标记为 failed。
 
         worker 被 kill -9 / 掉电后 run 永远停在 running，
@@ -189,6 +193,10 @@ class ParquetDataJobStateStore:
         reaped: List[DataJobRunRecord] = []
         for run in self.list_runs(limit=1000):
             if run.status not in {"pending", "queued", "running"}:
+                continue
+            # 自动重试会让活跃 run 超过单次脚本超时；注册在册即仍在执行，
+            # 不能按墙钟时间误杀。进程重启后的孤儿由 reap_orphan_runs 清理。
+            if is_active is not None and is_active(run.id):
                 continue
             reference = run.started_at or run.created_at
             try:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import app.services.data_jobs.auto_init as auto_init
 from app.services.data_jobs.auto_init import (
     AutoInitScheduler,
     plan_init_jobs,
@@ -439,3 +440,60 @@ def test_run_auto_init_dedupes_gap_job_already_in_asset_chain():
         "factor_compute",
         "text2sql_wide_table",
     ]
+
+
+def test_auto_init_wait_timeout_covers_configured_task_retries(monkeypatch):
+    """02:30 编排不得在一次脚本超时时就放弃仍在自动重试的 run。"""
+    monkeypatch.setenv("DATA_JOB_MAX_RETRIES", "2")
+    monkeypatch.setenv("DATA_JOB_RETRY_BACKOFF_SECONDS", "0")
+    timeouts = []
+
+    def fake_wait(_service, _run_id, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return "success"
+
+    monkeypatch.setattr(auto_init, "_wait_for_terminal", fake_wait)
+    result = run_auto_init(
+        _FakeService(), _healthy_inspect, sleep=lambda _: None, run_timeout=100
+    )
+
+    assert result["status"] == "success"
+    assert timeouts == [300] * 5
+
+
+def test_auto_init_resumes_same_day_chain_after_failed_node(tmp_path):
+    checkpoint = tmp_path / "auto_init_progress.json"
+    first_service = _FakeService(fail_on="wide_table_builder")
+    first = run_auto_init(
+        first_service,
+        _healthy_inspect,
+        sleep=lambda _: None,
+        checkpoint_path=checkpoint,
+        run_date="2026-10-31",
+    )
+    assert first["status"] == "failed"
+    assert checkpoint.is_file()
+
+    second_service = _FakeService()
+    second = run_auto_init(
+        second_service,
+        _healthy_inspect,
+        sleep=lambda _: None,
+        checkpoint_path=checkpoint,
+        run_date="2026-10-31",
+    )
+
+    assert second["status"] == "success"
+    assert second_service.submitted == [
+        "wide_table_builder",
+        "factor_compute",
+        "text2sql_wide_table",
+    ]
+    assert second["completed"] == [
+        "stock_basic_fuyao",
+        "financial_fuyao",
+        "wide_table_builder",
+        "factor_compute",
+        "text2sql_wide_table",
+    ]
+    assert not checkpoint.exists()

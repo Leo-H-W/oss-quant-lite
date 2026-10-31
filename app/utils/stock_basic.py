@@ -43,14 +43,13 @@ def main() -> None:
             part = pro.stock_basic(exchange="", list_status=status, fields=FIELDS)
         except Exception as exc:
             print(f"[stock_basic] 下载 list_status={status} 失败: {exc}")
-            continue
+            raise  # 不写入缺状态的半截股票清单，交由任务层自动重试
         if part is not None and not part.empty:
             print(f"[stock_basic] list_status={status}: {len(part)} 条")
             frames.append(part)
 
     if not frames:
-        print("[stock_basic] 没有获取到股票基础资料，跳过写入。")
-        return
+        raise RuntimeError("[stock_basic] 没有获取到股票基础资料，作业标记失败")
 
     df = pd.concat(frames, ignore_index=True).drop_duplicates(subset="ts_code", keep="first")
     df = _normalize_list_date(df)

@@ -104,7 +104,11 @@ class DataJobService:
         # 不清理的话 find_active_duplicate 会永久拒绝该作业再次提交
         reap_stale = getattr(self.state_store, "reap_stale_runs", None)
         if callable(reap_stale):
-            reap_stale()
+            try:
+                reap_stale(is_active=self._is_active)
+            except TypeError:
+                # 测试替身/旧状态存储没有判活参数，保持原接口兼容
+                reap_stale()
         # 注册表精确判活收割（每进程一次）：重启留下的假 running 立即清偿
         self._reap_orphans_once()
         find_active_duplicate = getattr(self.state_store, "find_active_duplicate", None)

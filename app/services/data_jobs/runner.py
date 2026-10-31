@@ -1,8 +1,38 @@
 from pathlib import Path
+from dataclasses import dataclass
 import os
 import subprocess
 import sys
 from typing import Any, Dict, Optional, Tuple
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """所有数据任务共用的有限自动重试策略。"""
+
+    max_attempts: int = 6
+    backoff_seconds: float = 60.0
+
+    def delay_after(self, attempt: int) -> float:
+        if self.backoff_seconds <= 0:
+            return 0.0
+        return min(self.backoff_seconds * (2 ** max(0, attempt - 1)), 300.0)
+
+    def total_timeout(self, single_attempt_timeout: float) -> float:
+        delays = sum(self.delay_after(attempt) for attempt in range(1, self.max_attempts))
+        return single_attempt_timeout * self.max_attempts + delays
+
+
+def get_retry_policy() -> RetryPolicy:
+    try:
+        max_retries = max(0, int(os.environ.get("DATA_JOB_MAX_RETRIES", "5")))
+    except (TypeError, ValueError):
+        max_retries = 5
+    try:
+        backoff = max(0.0, float(os.environ.get("DATA_JOB_RETRY_BACKOFF_SECONDS", "60")))
+    except (TypeError, ValueError):
+        backoff = 60.0
+    return RetryPolicy(max_attempts=max_retries + 1, backoff_seconds=backoff)
 
 
 class ScriptRunner:

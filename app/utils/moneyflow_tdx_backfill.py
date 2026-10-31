@@ -33,11 +33,13 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.utils.moneyflow_tdx import aggregate_stock, merge_save  # noqa: E402
+from app.utils.job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint  # noqa: E402
 from app.utils.parquet_job_helpers import normalize_ymd  # noqa: E402
 
 REL_TABLE = "moneyflow/daily"
 COMPLETE_RATIO = 0.8
 DATE_INTERVAL = 1.0  # 每个交易日之间的礼节性间隔
+CHUNK_STOCKS = 500
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +116,20 @@ def main() -> int:
         ts_codes = [c for c in ts_codes if c in wanted]
 
     data_root = _PROJECT_ROOT / "data"
-    pending = find_pending_dates(dates, data_root, len(ts_codes))
+    checkpoint_root = data_root / "data_job_state" / "checkpoints"
+
+    def date_checkpoint(ymd):
+        return plan_checkpoint_path(
+            checkpoint_root, "moneyflow_tdx_backfill",
+            {"trade_date": ymd, "ts_codes": ts_codes},
+        )
+
+    pending_set = set(find_pending_dates(dates, data_root, len(ts_codes)))
+    # 行数达到 80% 也不能掩盖“上次仍有失败股票”的检查点。
+    pending = [
+        ymd for ymd in dates
+        if ymd in pending_set or date_checkpoint(ymd).is_file()
+    ]
     my_dates = shard_dates(pending, shards, shard_index)
     print(
         f"[backfill] 分片 {shard_index}/{shards}：区间 {start}~{end}，"
@@ -138,32 +153,58 @@ def main() -> int:
         for di, ymd in enumerate(my_dates, 1):
             date_int = int(ymd)
             trade_date = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}"
-            rows, failed = [], []
-            for idx, ts_code in enumerate(ts_codes, 1):
-                try:
-                    rows.append(aggregate_stock(api, ts_code, date_int))
-                except Exception as exc:  # noqa: BLE001 - 单股失败不阻断
-                    failed.append(ts_code)
-                    # 连接可能已断：重建后续跑
+            checkpoint_path = date_checkpoint(ymd)
+            checkpoint = load_checkpoint(checkpoint_path)
+            completed = set(checkpoint.get("completed_ts_codes", []))
+            rows, failed, pending_codes = [], [], []
+            total_saved_date = 0
+
+            def flush():
+                nonlocal total_saved_date
+                if not pending_codes:
+                    return
+                total_saved_date += merge_save(rows, trade_date)
+                completed.update(pending_codes)
+                save_checkpoint(checkpoint_path, {
+                    "version": 1,
+                    "trade_date": ymd,
+                    "completed_ts_codes": sorted(completed),
+                })
+                rows.clear()
+                pending_codes.clear()
+
+            try:
+                for idx, ts_code in enumerate(ts_codes, 1):
+                    if ts_code in completed:
+                        continue
                     try:
-                        api.disconnect()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    api = create_hq_api()
-                    try:
-                        connect_first_available(api, hosts=hosts)
-                    except Exception as exc2:  # noqa: BLE001
-                        print(f"[backfill] 重连失败，本路终止: {exc2}", flush=True)
-                        raise
-                if idx % 500 == 0:
-                    print(f"[backfill] {trade_date} 进度 {idx}/{len(ts_codes)}", flush=True)
-            saved = merge_save(rows, trade_date)
+                        rows.append(aggregate_stock(api, ts_code, date_int))
+                        pending_codes.append(ts_code)
+                    except Exception as exc:  # noqa: BLE001 - 失败股票留给下次重试
+                        failed.append(ts_code)
+                        try:
+                            api.disconnect()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        api = create_hq_api()
+                        try:
+                            connect_first_available(api, hosts=hosts)
+                        except Exception as exc2:  # noqa: BLE001
+                            print(f"[backfill] 重连失败，本路终止: {exc2}", flush=True)
+                            raise
+                    if len(pending_codes) >= CHUNK_STOCKS:
+                        flush()
+                        print(f"[backfill] {trade_date} 进度 {idx}/{len(ts_codes)}", flush=True)
+            finally:
+                flush()
             total_failed += len(failed)
             print(
-                f"[backfill] {trade_date} 完成：写入 {saved} 行，失败 {len(failed)} 只"
+                f"[backfill] {trade_date} 完成：写入 {total_saved_date} 行，失败 {len(failed)} 只"
                 f"（本路 {di}/{len(my_dates)} 天）",
                 flush=True,
             )
+            if not failed:
+                clear_checkpoint(checkpoint_path)
             time.sleep(DATE_INTERVAL)
     finally:
         try:
@@ -172,7 +213,7 @@ def main() -> int:
             pass
 
     print(f"[backfill] 分片 {shard_index} 结束，累计失败 {total_failed} 只", flush=True)
-    return 0
+    return 1 if total_failed else 0
 
 
 if __name__ == "__main__":

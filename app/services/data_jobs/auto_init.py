@@ -26,6 +26,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
+from app.services.data_jobs.runner import get_retry_policy
+from app.utils.job_checkpoint import clear_checkpoint, load_checkpoint, save_checkpoint
 from startup_runtime import PARQUET_ASSETS
 
 # 资产 → 补齐任务，顺序即依赖序（交易日历/基础资料 → 行情 → 宽表物化）
@@ -174,6 +176,8 @@ def run_auto_init(
     sleep: Callable[[float], None] = time.sleep,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     run_timeout: float = DEFAULT_RUN_TIMEOUT,
+    checkpoint_path: Optional[Path] = None,
+    run_date: Optional[str] = None,
 ) -> Dict[str, object]:
     """串行执行补齐链。返回结果 dict（status: ok/success/failed/skipped/busy）。"""
     connected, existing, non_empty = inspect_fn()
@@ -203,11 +207,33 @@ def run_auto_init(
         jobs = jobs + maintenance_jobs
 
     if not jobs:
+        if checkpoint_path:
+            clear_checkpoint(checkpoint_path)
         return {"status": "ok", "completed": []}
 
     logger.info(f"[auto-init] 缺失资产: {missing + empty}，执行任务链: {jobs}")
+    run_date = run_date or datetime.now().date().isoformat()
     completed: List[str] = []
+    if checkpoint_path:
+        checkpoint = load_checkpoint(checkpoint_path)
+        if checkpoint.get("run_date") == run_date:
+            completed = [
+                str(job) for job in checkpoint.get("completed_jobs", [])
+                if str(job) in jobs
+            ]
+        if completed:
+            logger.info(f"[auto-init] 从链级检查点续跑，已完成: {completed}")
+        save_checkpoint(checkpoint_path, {
+            "version": 1,
+            "run_date": run_date,
+            "planned_jobs": jobs,
+            "completed_jobs": completed,
+        })
+
+    wait_timeout = get_retry_policy().total_timeout(run_timeout)
     for job_type in jobs:
+        if job_type in completed:
+            continue
         try:
             run = service.submit(job_type, {})
         except ValueError as exc:
@@ -219,7 +245,7 @@ def run_auto_init(
         logger.info(f"[auto-init] 已提交 {job_type} (run_id={run.id})，等待完成…")
         final = _wait_for_terminal(
             service, run.id,
-            sleep=sleep, poll_interval=poll_interval, timeout=run_timeout,
+            sleep=sleep, poll_interval=poll_interval, timeout=wait_timeout,
         )
         if final != "success":
             logger.warning(
@@ -232,7 +258,17 @@ def run_auto_init(
                 "completed": completed,
             }
         completed.append(job_type)
+        if checkpoint_path:
+            # 仅在上游任务成功后推进链级游标，重启不会重复已完成节点。
+            save_checkpoint(checkpoint_path, {
+                "version": 1,
+                "run_date": run_date,
+                "planned_jobs": jobs,
+                "completed_jobs": completed,
+            })
 
+    if checkpoint_path:
+        clear_checkpoint(checkpoint_path)
     logger.info(f"[auto-init] 补齐链全部完成: {completed}")
     return {"status": "success", "completed": completed}
 
@@ -277,6 +313,10 @@ class AutoInitScheduler:
         root = Path(data_dir) if data_dir else Path("data")
         return root / "data_job_state" / "auto_init_state.json"
 
+    @property
+    def progress_path(self) -> Path:
+        return self.state_path.with_name("auto_init_progress.json")
+
     # -- 状态读写 -----------------------------------------------------------
 
     def load_state(self) -> Dict[str, object]:
@@ -311,7 +351,7 @@ class AutoInitScheduler:
             logger.info("[auto-init] 另一次初始化正在进行，本次跳过")
             return None
         try:
-            result = self._execute()
+            result = self._execute(run_date=now.date().isoformat())
         finally:
             self._run_lock.release()
         self.mark_run(now, result)
@@ -347,7 +387,7 @@ class AutoInitScheduler:
             logger.warning(f"[auto-init] 健康快照失败: {exc}")
         return result
 
-    def _execute(self) -> Dict[str, object]:
+    def _execute(self, run_date: Optional[str] = None) -> Dict[str, object]:
         # 延迟导入：模块加载不触碰 Flask/service，保持纯函数可测
         from app.api.data_jobs_api import get_data_job_service
         from startup_runtime import inspect_parquet_data_assets
@@ -360,6 +400,8 @@ class AutoInitScheduler:
                     service,
                     lambda: inspect_parquet_data_assets(data_dir),
                     stale_tables_fn=lambda: find_stale_daily_tables(data_dir),
+                    checkpoint_path=self.progress_path,
+                    run_date=run_date,
                 ),
                 service=service,
                 data_dir=data_dir,
@@ -419,6 +461,14 @@ def start_auto_init(app) -> Optional[AutoInitScheduler]:
             from startup_runtime import inspect_parquet_data_assets
 
             data_dir = app.config.get("DATA_DIR")
+            if scheduler.progress_path.is_file():
+                logger.info("[auto-init] 启动检查发现未完成链级检查点，从上次节点续跑")
+                if scheduler._run_lock.acquire(blocking=False):
+                    try:
+                        scheduler._execute()
+                    finally:
+                        scheduler._run_lock.release()
+                return
             try:
                 connected, existing, non_empty = inspect_parquet_data_assets(data_dir)
             except Exception as exc:  # noqa: BLE001

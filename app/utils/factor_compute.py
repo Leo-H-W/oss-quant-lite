@@ -26,6 +26,7 @@ from loguru import logger
 
 from app.services.data_reader import ParquetDataReader
 from app.services.factor_engine import FactorEngine
+from app.utils.job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint
 
 
 def _split_env(name):
@@ -33,6 +34,11 @@ def _split_env(name):
     if not value:
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _is_retryable(exc):
+    """网络/超时失败可续跑重试；表达式等确定性错误保留部分成功语义。"""
+    return isinstance(exc, (ConnectionError, TimeoutError, OSError))
 
 
 def main():
@@ -57,14 +63,44 @@ def main():
     if not start_date:
         start_date = end_date or trade_date
 
-    total_saved = 0
+    checkpoint_path = plan_checkpoint_path(
+        os.path.join(
+            os.getenv("DATA_DIR", os.path.join(_project_root, "data")),
+            "data_job_state", "checkpoints",
+        ),
+        "factor_compute",
+        {
+            "start_date": start_date, "end_date": end_date,
+            "factor_ids": factor_ids, "ts_codes": ts_codes,
+        },
+    )
+    checkpoint = load_checkpoint(checkpoint_path)
+    completed_units = set(checkpoint.get("completed_units", []))
+    unit_rows = checkpoint.get("unit_rows", {})
+    if not isinstance(unit_rows, dict):
+        unit_rows = {}
+    if completed_units:
+        print(f"从检查点续跑，已完成 {len(completed_units)} 个因子计算单元")
+
+    total_saved = sum(int(unit_rows.get(str(unit), 0)) for unit in completed_units)
     per_factor_stats = {}
     failed = 0
     attempted = 0
 
+    def mark_completed(unit, rows):
+        completed_units.add(str(unit))
+        unit_rows[str(unit)] = int(rows)
+        save_checkpoint(checkpoint_path, {
+            "version": 1,
+            "completed_units": sorted(completed_units),
+            "unit_rows": unit_rows,
+        })
+
     if factor_ids:
         # 指定因子：区间一次算完（内置因子支持任意区间）
         for factor_id in factor_ids:
+            if factor_id in completed_units:
+                continue
             attempted += 1
             try:
                 result = engine.calculate_factor(
@@ -74,10 +110,12 @@ def main():
                     per_factor_stats[factor_id] = 0
                     continue
                 engine.save_factor_values(result)
+                mark_completed(factor_id, len(result))
                 per_factor_stats[factor_id] = len(result)
                 total_saved += len(result)
             except Exception as e:
-                failed += 1
+                if _is_retryable(e):
+                    failed += 1
                 logger.error(f"计算因子 {factor_id} 失败: {e}")
                 per_factor_stats[factor_id] = f"error: {e}"
     else:
@@ -87,17 +125,21 @@ def main():
             print(f"区间 {start_date} ~ {end_date} 没有交易日数据")
             sys.exit(1)
         for date in dates:
+            if str(date) in completed_units:
+                continue
             attempted += 1
             try:
                 result = engine.calculate_all_factors(date, ts_codes)
             except Exception as e:
-                failed += 1
+                if _is_retryable(e):
+                    failed += 1
                 logger.error(f"计算 {date} 全部因子失败: {e}")
                 continue
             if result.empty:
                 per_factor_stats[str(date)] = 0
                 continue
             engine.save_factor_values(result)
+            mark_completed(date, len(result))
             per_factor_stats[str(date)] = len(result)
             total_saved += len(result)
 
@@ -110,10 +152,9 @@ def main():
         print(f"{attempted} 个计算单元全部零产出，判定作业失败")
         sys.exit(1)
     if failed:
-        print(
-            f"警告: {failed}/{attempted} 个计算单元失败。部分成功不阻断流水线，"
-            "缺失的因子值会被回测覆盖率校验拦截"
-        )
+        print(f"{failed}/{attempted} 个计算单元失败，保留检查点并交由任务层自动重试")
+        sys.exit(1)
+    clear_checkpoint(checkpoint_path)
 
 
 if __name__ == "__main__":

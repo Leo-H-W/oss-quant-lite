@@ -35,6 +35,11 @@
 | 健康度 API 合约（GET /health、POST /health/repair） | tests/api/test_data_jobs_health_api.py | module_data_jobs |
 | moneyflow 历史回补驱动合约（日期计划/断点续跑/分片） | tests/data_jobs/test_moneyflow_tdx_backfill.py | module_data_jobs |
 | Baostock 断流处理合约（连接类错误码抛出触发重登录；10004011 北交所不支持按空数据处理） | tests/data_jobs/test_baostock_disconnect_contract.py | module_data_jobs |
+| daily_basic 股票级检查点 | tests/data_jobs/test_daily_basic_checkpoint.py | module_data_jobs |
+| 按日/财务/复权/资金流回补检查点 | tests/data_jobs/test_backfill_resume_contracts.py | module_data_jobs |
+| 扶摇与衍生计算回补检查点 | tests/data_jobs/test_remaining_resume_contracts.py | module_data_jobs |
+| 隐藏/独立回补与快照失败合约 | tests/data_jobs/test_additional_resume_contracts.py | module_data_jobs |
+| data-gather CLI 状态、更新、活动任务与重试覆盖 | tests/data_jobs/test_data_gather_cli.py | module_data_jobs |
 
 ### 健康度监控验收标准（2026-10-26 新增）
 
@@ -56,5 +61,5 @@ daily_basic 出现 631/5572 行的残缺分区却被视为"已有数据"。
 - 无（数据入口模块）
 
 ## 验收状态
-- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed；2026-10-26 健康度监控新增后：197 passed）
+- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed；2026-10-26 健康度监控新增后：197 passed；2026-10-31 断点续跑/自动重试新增后：253 passed）
 - [ ] 数值软目标：N/A

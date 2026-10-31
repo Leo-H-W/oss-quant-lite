@@ -7,6 +7,16 @@
 ### 结构性门禁
 - [x] `pytest -m module_data_jobs` 全绿（2026-04-10 验收，13 个测试全绿）
 - [x] `pytest -m module_data_jobs` 全绿（2026-10-26 复验，197 passed，含新增任务健康度监控 19 项合约）
+- [x] `pytest -m module_data_jobs` 全绿（2026-10-31 断点续跑/自动重试，253 passed）；`pytest -q` 全量 854 passed
+
+### 2026-10-31 数据回补断点续跑与自动重试
+- 全部登记任务支持每 run 独立有限重试（默认 5 次）；显式按日/报告期/股票批次回补
+  使用原子 JSON 检查点，凌晨 02:30 auto-init 增加链级检查点。
+- 新增 `data-gather.py status/update/help`：状态范围、活动 run、确认后重新开始及
+  每类任务独立的命令行重试覆盖。
+- 实机 run_id=46（daily_basic 2019-01-01~2022-12-31）验证：前两次中断后分别从
+  500/800 只检查点续跑；记录时第 3 次尝试推进至 2460/5578 只，任务仍在运行。
+  日志：`logs/daily_basic_backfill_2019_2022_resumable.log`。
 
 ### 数值软目标
 - N/A

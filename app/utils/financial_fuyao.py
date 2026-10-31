@@ -36,6 +36,7 @@ from loguru import logger
 from app.utils.data_sources.fuyao_client import FuyaoClient
 from app.utils.data_sources.fuyao_normalize import financial_items_to_frame
 from app.utils.parquet_job_helpers import env_bool, latest_partition_date
+from app.utils.job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint
 from app.utils.parquet_writer import save_to_parquet
 
 #: 扶摇表名 → 本地分区表名
@@ -156,15 +157,28 @@ def _sync_table(
     symbols: List[str],
     limit: int,
     data_dir: Optional[str],
+    checkpoint_path: Optional[Path] = None,
+    failed_symbols: Optional[List[str]] = None,
 ) -> Tuple[int, int, int]:
     """同步一张财务表，返回 (拉取成功标的数, 写入报告期数, 写入行数)。"""
+    checkpoint = load_checkpoint(checkpoint_path) if checkpoint_path else {}
+    completed = set(
+        checkpoint.get("completed_symbols", [])
+        if checkpoint.get("limit") == limit else []
+    )
+    if completed:
+        logger.info(f"[financial_fuyao] {table} 从检查点续跑：{len(completed)}/{len(symbols)}")
+
     rows_by_period: Dict[str, List[pd.DataFrame]] = defaultdict(list)
     written_periods = 0
     written_rows = 0
     fetched_ok = 0
+    pending_symbols: List[str] = []
 
     def flush():
         nonlocal written_periods, written_rows
+        if not pending_symbols:
+            return
         for end_date in sorted(rows_by_period):
             new = pd.concat(rows_by_period[end_date], ignore_index=True)
             existing = _read_existing_partition(partition_table, end_date, data_dir)
@@ -172,22 +186,36 @@ def _sync_table(
             written_rows += save_to_parquet(merged, end_date, partition_table, data_dir=data_dir)
             written_periods += 1
         rows_by_period.clear()
+        completed.update(pending_symbols)
+        pending_symbols.clear()
+        if checkpoint_path:
+            save_checkpoint(checkpoint_path, {
+                "version": 1,
+                "limit": limit,
+                "completed_symbols": sorted(completed),
+            })
 
-    fetched = 0
-    for symbol in symbols:
-        try:
-            items = client.financial_statement(table, symbol, limit=limit)
-        except Exception as exc:  # noqa: BLE001 - 单标的失败不阻断全市场任务
-            logger.warning(f"[financial_fuyao] {table} {symbol} 拉取失败，跳过: {exc}")
-            continue
-        frame = financial_items_to_frame(items, table, symbol)
-        fetched_ok += 1
-        for end_date, group in frame.groupby("end_date"):
-            rows_by_period[str(end_date)].append(group)
-        if fetched_ok % SYMBOL_CHUNK_SIZE == 0:
-            flush()
-            logger.info(f"[financial_fuyao] {table} 进度: {fetched_ok}/{len(symbols)}")
-    flush()
+    try:
+        for symbol in symbols:
+            if symbol in completed:
+                continue
+            try:
+                items = client.financial_statement(table, symbol, limit=limit)
+            except Exception as exc:  # noqa: BLE001 - 单标的失败留待整轮自动重试
+                logger.warning(f"[financial_fuyao] {table} {symbol} 拉取失败: {exc}")
+                if failed_symbols is not None:
+                    failed_symbols.append(symbol)
+                continue
+            frame = financial_items_to_frame(items, table, symbol)
+            fetched_ok += 1
+            pending_symbols.append(symbol)
+            for end_date, group in frame.groupby("end_date"):
+                rows_by_period[str(end_date)].append(group)
+            if len(pending_symbols) >= SYMBOL_CHUNK_SIZE:
+                flush()
+                logger.info(f"[financial_fuyao] {table} 进度: {len(completed)}/{len(symbols)}")
+    finally:
+        flush()
     return fetched_ok, written_periods, written_rows
 
 
@@ -210,25 +238,42 @@ def main() -> int:
         if expected is None:
             print(f"[financial_fuyao] {partition_table}: 尚无过披露截止日的报告期，跳过")
             continue
-        if latest_local is not None and latest_local >= expected and not full_refresh:
+        from app.utils.parquet_job_helpers import _default_data_root
+
+        checkpoint_path = plan_checkpoint_path(
+            Path(data_dir or _default_data_root()) / "data_job_state" / "checkpoints",
+            f"financial_fuyao_{partition_table}",
+            {"expected": expected, "full_refresh": full_refresh, "symbols": symbols},
+        )
+        checkpoint = load_checkpoint(checkpoint_path)
+        if latest_local is not None and latest_local >= expected and not full_refresh and not checkpoint_path.is_file():
             print(f"[financial_fuyao] {partition_table}: 本地 {latest_local} 已覆盖 {expected}，跳过")
             continue
 
         periods = resolve_fetch_periods(latest_local, expected)
-        limit = min(MAX_FETCH_PERIODS, max(2, len(periods) + (0 if full_refresh else 1)))
+        computed_limit = min(MAX_FETCH_PERIODS, max(2, len(periods) + (0 if full_refresh else 1)))
+        limit = int(checkpoint.get("limit") or computed_limit)
         print(
             f"[financial_fuyao] {partition_table}: local={latest_local or '无'} expected={expected} "
             f"periods={len(periods)} limit={limit} symbols={len(symbols)} "
             f"(预计约 {len(symbols) * 0.12 / 60:.0f} 分钟)"
         )
+        failed_symbols: List[str] = []
         fetched_ok, written_periods, written_rows = _sync_table(
-            client, table, partition_table, symbols, limit, data_dir
+            client, table, partition_table, symbols, limit, data_dir,
+            checkpoint_path=checkpoint_path,
+            failed_symbols=failed_symbols,
         )
         print(
             f"[financial_fuyao] {partition_table} 完成: periods={written_periods}, "
             f"total_upsert={written_rows}"
         )
-        if fetched_ok == 0:
+        if failed_symbols:
+            print(f"[financial_fuyao] {partition_table}: {len(failed_symbols)} 只标的失败，保留检查点供自动重试")
+            overall_exit = 1
+        else:
+            clear_checkpoint(checkpoint_path)
+        if fetched_ok == 0 and not checkpoint.get("completed_symbols"):
             print(f"[financial_fuyao] {partition_table}: 全部标的拉取失败，作业标记失败")
             overall_exit = 1
     return overall_exit
