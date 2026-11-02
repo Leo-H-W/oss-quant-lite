@@ -36,6 +36,38 @@ def _split_env(name):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def existing_factor_dates():
+    """本地有效因子分区日期（YYYYMMDD），只读目录与 Parquet 文件状态。"""
+    from pathlib import Path
+
+    root = Path(os.getenv("DATA_DIR", os.path.join(_project_root, "data")))
+    table = root / "ml_factor_state" / "factor_values"
+    dates = set()
+    if not table.is_dir():
+        return dates
+    for part in table.glob("trade_date=*"):
+        value = part.name.split("=", 1)[-1].replace("-", "")
+        if len(value) != 8 or not value.isdigit():
+            continue
+        if any(path.is_file() and path.stat().st_size > 0 for path in part.rglob("*.parquet")):
+            dates.add(value)
+    return dates
+
+
+def resolve_default_date_range(all_dates, existing_dates):
+    """默认模式：补最早缺口至最新；无空洞或无历史时只算最新交易日。"""
+    dates = sorted(str(value).replace("-", "") for value in all_dates)
+    if not dates:
+        raise ValueError("没有交易日数据")
+    latest = dates[-1]
+    existing = {str(value).replace("-", "") for value in existing_dates}
+    if not existing:
+        return latest, latest
+    baseline = min(existing)
+    missing = [date for date in dates if baseline <= date and date not in existing]
+    return (missing[0] if missing else latest), latest
+
+
 def _is_retryable(exc):
     """网络/超时失败可续跑重试；表达式等确定性错误保留部分成功语义。"""
     return isinstance(exc, (ConnectionError, TimeoutError, OSError))
@@ -50,13 +82,16 @@ def main():
     factor_ids = _split_env("DATA_JOB_PARAM_FACTOR_IDS")
     ts_codes = _split_env("DATA_JOB_PARAM_TS_CODES")
 
+    default_history_mode = False
     if not start_date and not end_date and not trade_date:
-        # 默认：最新交易日
+        # 默认：历史有空洞则从最早缺口补到最新；无空洞只重算最新交易日。
         all_dates = ParquetDataReader().get_trade_dates()
         if not all_dates:
             print("没有任何交易日数据，无法计算因子")
             sys.exit(1)
-        trade_date = all_dates[-1]
+        start_date, end_date = resolve_default_date_range(all_dates, existing_factor_dates())
+        default_history_mode = True
+        print(f"默认完整性检查：计算区间 {start_date} ~ {end_date}")
 
     if not end_date:
         end_date = trade_date or start_date
@@ -154,6 +189,13 @@ def main():
     if failed:
         print(f"{failed}/{attempted} 个计算单元失败，保留检查点并交由任务层自动重试")
         sys.exit(1)
+    if default_history_mode and not factor_ids and not ts_codes:
+        target_dates = ParquetDataReader().get_trade_dates(start_date, end_date)
+        normalized_targets = {str(date).replace("-", "") for date in target_dates}
+        remaining = sorted(normalized_targets - existing_factor_dates())
+        if remaining:
+            print(f"因子计算后仍有 {len(remaining)} 个日期缺分区: {remaining[:10]}，判定失败")
+            sys.exit(1)
     clear_checkpoint(checkpoint_path)
 
 

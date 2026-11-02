@@ -33,6 +33,12 @@ def _find_stale_daily_tables(data_dir):
 
     return find_stale_daily_tables(data_dir)
 
+
+def _find_daily_coverage_gaps(data_dir):
+    from app.services.data_jobs.auto_init import find_daily_coverage_gaps
+
+    return find_daily_coverage_gaps(data_dir)
+
 HELP = """数据维护工具
 
 用法：
@@ -154,12 +160,15 @@ def collect_status(root: Path) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     for label, rel_table in DAILY_TABLES:
         date_range, partitions = _daily_range(root, rel_table)
-        rows.append({"name": label, "range": date_range, "partitions": partitions})
+        rows.append({"name": label, "kind": "daily", "key": rel_table,
+                     "range": date_range, "partitions": partitions})
     date_range, partitions = _factor_range(root)
-    rows.append({"name": "因子计算值", "range": date_range, "partitions": partitions})
+    rows.append({"name": "因子计算值", "kind": "factor", "key": "factor_values",
+                 "range": date_range, "partitions": partitions})
     for label, rel_table in FINANCIAL_TABLES:
         period_range, partitions = _financial_range(root, rel_table)
-        rows.append({"name": label, "range": period_range, "partitions": partitions})
+        rows.append({"name": label, "kind": "financial", "key": rel_table,
+                     "range": period_range, "partitions": partitions})
     return rows
 
 
@@ -332,11 +341,119 @@ def cancel_active_runs(root: Path, runs: List[Dict[str, object]]) -> None:
         stopped_pids = alive
 
 
+def _format_date_gaps(dates: Sequence[str]) -> str:
+    values = sorted(dates)
+    if not values:
+        return "数据无缺失"
+    return f"缺失/残缺 {len(values)} 天（{values[0]}~{values[-1]}）"
+
+
+def _factor_completeness(root: Path) -> str:
+    try:
+        from app.services.data_jobs.auto_init import _expected_open_dates
+
+        open_days = _expected_open_dates(root)
+        existing = set()
+        table = root / "ml_factor_state" / "factor_values"
+        for part in table.glob("trade_date=*"):
+            if not any(_has_parquet(path) for path in part.rglob("*.parquet")):
+                continue
+            value = part.name.split("=", 1)[1].replace("-", "")
+            if len(value) == 8 and value.isdigit():
+                existing.add(value)
+        if not open_days or not existing:
+            return "完整性无法确认"
+        expected = [d for d in open_days if d >= min(existing)]
+        return _format_date_gaps(set(expected) - existing)
+    except Exception as exc:  # noqa: BLE001 - 单类检查失败不影响其他状态输出
+        return f"完整性无法确认（{exc}）"
+
+
+def _quarter_periods(start: str, end: str) -> List[str]:
+    periods = []
+    for year in range(int(start[:4]), int(end[:4]) + 1):
+        for month_day in ("0331", "0630", "0930", "1231"):
+            value = f"{year}{month_day}"
+            if start <= value <= end:
+                periods.append(value)
+    return periods
+
+
+def _expected_financial_period() -> Optional[str]:
+    today = datetime.now().date()
+    candidates = []
+    for year in (today.year - 1, today.year):
+        for month_day, (month, day) in {
+            "0331": (4, 30), "0630": (8, 31),
+            "0930": (10, 31), "1231": (4, 30),
+        }.items():
+            deadline_year = year + 1 if month_day == "1231" else year
+            deadline = datetime(deadline_year, month, day).date()
+            if deadline <= today:
+                candidates.append((deadline, f"{year}{month_day}"))
+    return max(candidates)[1] if candidates else None
+
+
+def _financial_completeness(root: Path, rel_table: str) -> str:
+    try:
+        local = {}
+        for path in (root / rel_table).glob("year=*/month=*/day=*/data.parquet"):
+            if not _has_parquet(path):
+                continue
+            y = path.parent.parent.parent.name.split("=", 1)[1]
+            m = path.parent.parent.name.split("=", 1)[1]
+            d = path.parent.name.split("=", 1)[1]
+            period = f"{y}{m}{d}"
+            if period[4:] in {"0331", "0630", "0930", "1231"}:
+                local[period] = path
+        expected = _expected_financial_period()
+        if not local or not expected:
+            return "完整性无法确认"
+        missing = set(_quarter_periods(min(local), expected)) - set(local)
+        messages = []
+        if missing:
+            values = sorted(missing)
+            messages.append(f"缺失 {len(values)} 个报告期（{values[0]}~{values[-1]}）")
+        if expected in local:
+            import pyarrow.parquet as pq
+            import pandas as pd
+
+            rows = int(pq.ParquetFile(local[expected]).metadata.num_rows)
+            stock_basic = root / "stock_basic.parquet"
+            if stock_basic.is_file():
+                universe = int(pd.read_parquet(stock_basic, columns=["ts_code"])["ts_code"].nunique())
+                if universe and rows < universe * 0.8:
+                    messages.append("最新报告期分区残缺")
+        return "；".join(messages) if messages else "数据无缺失"
+    except Exception as exc:  # noqa: BLE001
+        return f"完整性无法确认（{exc}）"
+
+
 def print_status(root: Path) -> None:
     print(f"本地数据目录：{root}")
+    try:
+        daily_gaps = _find_daily_coverage_gaps(str(root)) if _has_parquet(
+            root / "stock_trade_calendar.parquet"
+        ) else None
+    except Exception as exc:  # noqa: BLE001 - 状态命令不因扫描失败中断
+        print(f"完整性扫描失败：{exc}", file=sys.stderr)
+        daily_gaps = None
     for row in collect_status(root):
         date_range = row["range"] or "暂无本地数据"
         suffix = f"（{row['partitions']} 个分区）" if row["partitions"] else ""
+        completeness = ""
+        if row["range"]:
+            if row["kind"] == "daily":
+                if daily_gaps is None:
+                    completeness = "完整性无法确认"
+                else:
+                    completeness = _format_date_gaps(daily_gaps.get(row["key"], []))
+            elif row["kind"] == "factor":
+                completeness = _factor_completeness(root)
+            elif row["kind"] == "financial":
+                completeness = _financial_completeness(root, str(row["key"]))
+        if completeness:
+            suffix += f"，{completeness}"
         print(f"{row['name']}：{date_range}{suffix}")
     print(f"交易日历：{_calendar_range(root) or '暂无本地数据'}")
     for label, filename in SNAPSHOT_FILES:
@@ -394,7 +511,7 @@ def _run_update(root: Path, service, input_fn, skip_active_check: bool = False) 
         result = run_auto_init(
             service,
             lambda: inspect_parquet_data_assets(str(root)),
-            stale_tables_fn=lambda: _find_stale_daily_tables(str(root)),
+            gap_details_fn=lambda: _find_daily_coverage_gaps(str(root)),
             checkpoint_path=root / "data_job_state" / "data_gather_progress.json",
             run_date=run_date,
         )

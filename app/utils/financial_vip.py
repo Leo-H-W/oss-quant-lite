@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 
 from job_env import env_bool, normalize_ymd
 from job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint
-from parquet_job_helpers import latest_partition_date
+from parquet_job_helpers import existing_partition_dates, latest_partition_date
 from parquet_writer import save_partitioned_parquet
 
 QUARTER_ENDS = ("0331", "0630", "0930", "1231")
@@ -29,6 +29,18 @@ def quarter_periods(start_ymd: str, end_ymd: str) -> List[str]:
             if start_ymd <= period <= end_ymd:
                 periods.append(period)
     return periods
+
+
+def missing_report_periods(
+    table: str, end_date: str, data_dir: Optional[str] = None
+) -> List[str]:
+    """Tushare 备用链使用的报告期缺口；只比较标准季度分区。"""
+    local = {
+        period for period in existing_partition_dates(table, data_dir=data_dir)
+        if period[4:] in QUARTER_ENDS
+    }
+    baseline = min(local) if local else HISTORY_BASELINE
+    return [period for period in quarter_periods(baseline, end_date) if period not in local]
 
 
 def resolve_report_periods(
@@ -48,8 +60,13 @@ def resolve_report_periods(
         if full_refresh:
             start_date = HISTORY_BASELINE
         else:
-            # 从本地最新报告期（含）重拉，覆盖该期财报的后续更正
-            start_date = latest_partition_date(table, data_dir=data_dir) or HISTORY_BASELINE
+            # 优先补最早历史缺期；无缺口时从最新期（含）重拉以覆盖财报更正。
+            missing = missing_report_periods(table, end_date, data_dir=data_dir)
+            latest_local = latest_partition_date(table, data_dir=data_dir)
+            baselines = list(missing)
+            if latest_local:
+                baselines.append(latest_local)  # 同时保留最新期更正重拉
+            start_date = min(baselines) if baselines else HISTORY_BASELINE
 
     return quarter_periods(start_date, end_date), full_refresh
 
@@ -70,6 +87,7 @@ def run_financial_vip_job(api_name: str, table: str, fields: List[str]) -> None:
     """按报告期批量调用 vip 接口并按 end_date 分区落盘。"""
     from db_utils import DatabaseUtils
 
+    data_dir = os.getenv("DATA_DIR")
     periods, _ = resolve_report_periods(table)
     if not periods:
         print(f"[{table}] 无需更新：窗口内没有报告期")
@@ -111,5 +129,8 @@ def run_financial_vip_job(api_name: str, table: str, fields: List[str]) -> None:
         })
         print(f"[{table}] period={period} rows={rows}")
 
+    remaining = missing_report_periods(table, max(periods), data_dir=data_dir)
+    if remaining:
+        raise RuntimeError(f"[{table}] 执行后仍缺报告期: {remaining}")
     clear_checkpoint(checkpoint_path)
     print(f"[{table}] 完成，periods={periods}, total_upsert={total_saved}")

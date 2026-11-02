@@ -95,6 +95,7 @@ def test_financial_main_writes_partitions(monkeypatch, tmp_path):
     })
     monkeypatch.setattr(financial_fuyao, "FuyaoClient", lambda: client)
     monkeypatch.setattr(financial_fuyao, "all_stock_codes", lambda client=None: ["600000.SH"])
+    monkeypatch.setattr(financial_fuyao, "expected_latest_period", lambda today=None: "20260630")
 
     exit_code = financial_fuyao.main()
 
@@ -108,9 +109,12 @@ def test_financial_main_writes_partitions(monkeypatch, tmp_path):
 
 
 def test_financial_main_skips_when_local_covers_expected(monkeypatch, tmp_path, capsys):
-    (tmp_path / "income_statement" / "year=2026" / "month=06" / "day=30").mkdir(parents=True)
-    (tmp_path / "balance_sheet" / "year=2026" / "month=06" / "day=30").mkdir(parents=True)
-    (tmp_path / "cash_flow" / "year=2026" / "month=06" / "day=30").mkdir(parents=True)
+    for table in ("income_statement", "balance_sheet", "cash_flow"):
+        part = tmp_path / table / "year=2026" / "month=06" / "day=30"
+        part.mkdir(parents=True)
+        pd.DataFrame({"ts_code": ["600000.SH"], "end_date": ["20260630"]}).to_parquet(
+            part / "data.parquet"
+        )
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     client = _FakeFuyaoClient({})
     monkeypatch.setattr(financial_fuyao, "FuyaoClient", lambda: client)

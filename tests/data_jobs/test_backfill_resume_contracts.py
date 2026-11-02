@@ -62,6 +62,7 @@ def test_financial_vip_resumes_after_saved_report_period(monkeypatch, tmp_path):
     monkeypatch.setattr(
         financial_vip, "save_partitioned_parquet", lambda *_args: 1
     )
+    monkeypatch.setattr(financial_vip, "missing_report_periods", lambda *_args, **_kwargs: [])
     calls = []
     fail = {"value": True}
 

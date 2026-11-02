@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from loguru import logger
 
@@ -54,6 +54,31 @@ DAILY_GAP_JOB_CHAIN: Tuple[Tuple[str, str], ...] = (
     ("moneyflow/daily", "moneyflow_tdx"),
     ("cyq_perf/daily", "cyq_perf_compute"),
 )
+
+# 详细历史回补的候选源。旧 DAILY_GAP_JOB_CHAIN 保留给现有健康检查与调用方；
+# 新链路只有在前一候选最终失败或复扫仍有缺口时才尝试下一候选。
+COVERAGE_JOB_CANDIDATES: Dict[str, Tuple[str, ...]] = {
+    "daily_history/daily": ("daily_history_by_date", "daily_history_fuyao", "daily_history_tencent"),
+    "daily_basic/daily": ("daily_basic_baostock", "daily_basic"),
+    "stk_factor/daily": ("adj_factor_baostock", "stk_factor"),
+    "moneyflow/daily": ("moneyflow_tdx_backfill", "moneyflow"),
+    "cyq_perf/daily": ("cyq_perf_compute", "cyq_perf"),
+}
+
+# 非详细扫描路径与例行维护任务的备用源。候选复用同一组参数。
+JOB_SOURCE_FALLBACKS: Dict[str, Tuple[str, ...]] = {
+    "daily_history_by_date": ("daily_history_fuyao", "daily_history_tencent"),
+    "daily_basic": ("daily_basic_baostock",),
+    "daily_basic_baostock": ("daily_basic",),
+    "adj_factor_baostock": ("stk_factor",),
+    "moneyflow_tdx": ("moneyflow",),
+    "moneyflow_tdx_backfill": ("moneyflow",),
+    "cyq_perf_compute": ("cyq_perf",),
+    "stock_basic_fuyao": ("stock_basic",),
+    "financial_fuyao": ("financial_tushare", "financial_eastmoney"),
+}
+
+PARTITION_COMPLETE_RATIO = 0.8
 
 # 每晚例行刷新的非分区/派生数据。原始日频表只在断档时回补，而这些任务
 # 没有统一的 Hive 分区可供 find_stale_daily_tables 检查，必须显式纳入链路：
@@ -148,6 +173,135 @@ def find_stale_daily_tables(
     return stale
 
 
+def _expected_open_dates(root: Path, now: Optional[datetime] = None) -> List[str]:
+    """返回截至数据就绪时点的开市日；与旧最新分区检查共用 18:00 口径。"""
+    import pandas as pd
+
+    now = now or datetime.now()
+    cal_path = root / "stock_trade_calendar.parquet"
+    if not cal_path.is_file():
+        return []
+    cal = pd.read_parquet(cal_path, columns=["cal_date", "is_open"])
+    today = now.strftime("%Y%m%d")
+    open_days = sorted(
+        str(d) for d in cal.loc[cal["is_open"] == 1, "cal_date"] if str(d) <= today
+    )
+    if open_days and open_days[-1] == today and now.hour < DATA_READY_HOUR:
+        open_days = open_days[:-1]
+    return open_days
+
+
+def _coverage_partition_files(root: Path, rel_table: str) -> Dict[str, Path]:
+    files: Dict[str, Path] = {}
+    table = root / rel_table
+    if not table.is_dir():
+        return files
+    for path in table.glob("year=*/month=*/day=*/data.parquet"):
+        try:
+            y = path.parent.parent.parent.name.split("=", 1)[1]
+            m = path.parent.parent.name.split("=", 1)[1]
+            d = path.parent.name.split("=", 1)[1]
+        except (IndexError, ValueError):
+            continue
+        files[f"{y}{m}{d}"] = path
+    return files
+
+
+def _partition_row_count(path: Path) -> Optional[int]:
+    """只读 footer；空/坏文件返回 None，由调用方按缺口处理。"""
+    if not path.is_file() or path.stat().st_size <= 0:
+        return None
+    try:
+        import pyarrow.parquet as pq
+
+        return int(pq.ParquetFile(path).metadata.num_rows)
+    except Exception:  # noqa: BLE001 - 坏分区必须进入修复而不是阻断其他表扫描
+        return None
+
+
+def find_daily_coverage_gaps(
+    data_dir: Optional[str], now: Optional[datetime] = None
+) -> Dict[str, List[str]]:
+    """扫描已有历史基线内的缺日期、最新缺日期、坏分区和行数残缺分区。
+
+    每张表从自己的最早分区开始，不自动向更早历史扩展。非日线表行数低于
+    同日日线 80% 时按残缺处理；该阈值容忍退市、停牌和北交所源覆盖差异。
+    """
+    root = Path(data_dir) if data_dir else Path("data")
+    open_days = _expected_open_dates(root, now)
+    if not open_days:
+        return {}
+    expected_end = open_days[-1]
+    partitions = {
+        table: _coverage_partition_files(root, table) for table, _ in DAILY_GAP_JOB_CHAIN
+    }
+    daily_counts = {
+        date: _partition_row_count(path)
+        for date, path in partitions.get("daily_history/daily", {}).items()
+    }
+
+    gaps: Dict[str, List[str]] = {}
+    for table, _job_type in DAILY_GAP_JOB_CHAIN:
+        files = partitions.get(table) or {}
+        if not files:
+            # 冷启动仍由资产检查链负责；无历史基线时不臆造回补区间。
+            continue
+        first = min(files)
+        expected = [d for d in open_days if first <= d <= expected_end]
+        missing = set(expected) - set(files)
+        for date, path in files.items():
+            if date > expected_end:
+                continue
+            rows = _partition_row_count(path)
+            if rows is None:
+                missing.add(date)
+                continue
+            if table == "daily_history/daily":
+                continue
+            benchmark = daily_counts.get(date)
+            if benchmark and rows < benchmark * PARTITION_COMPLETE_RATIO:
+                missing.add(date)
+        if missing:
+            gaps[table] = sorted(missing)
+    return gaps
+
+
+def _iso_date(ymd: str) -> str:
+    clean = str(ymd).replace("-", "")
+    return f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
+
+
+def plan_coverage_gap_jobs(gaps: Mapping[str, Sequence[str]]) -> List[Dict[str, Any]]:
+    """历史缺口 → 带显式区间的候选任务，顺序保持上游到下游。"""
+    specs: List[Dict[str, Any]] = []
+    for table, _old_job in DAILY_GAP_JOB_CHAIN:
+        dates = sorted(set(str(d).replace("-", "") for d in gaps.get(table, [])))
+        if not dates:
+            continue
+        params = {"start_date": _iso_date(dates[0]), "end_date": _iso_date(dates[-1])}
+        job_types = COVERAGE_JOB_CANDIDATES[table]
+        if table == "cyq_perf/daily":
+            # 本地模型必须从完整预热窗计算；Tushare 备用只拉目标缺口区间。
+            candidates = [(job_types[0], {"end_date": params["end_date"]})]
+            candidates.extend((job, dict(params)) for job in job_types[1:])
+        else:
+            candidates = [(job, dict(params)) for job in job_types]
+        specs.append({
+            "table": table,
+            "job_type": candidates[0][0],
+            "params": candidates[0][1],
+            "candidates": candidates,
+        })
+    return specs
+
+
+def _default_job_candidates(job_type: str, params: Optional[Dict[str, Any]] = None):
+    params = dict(params or {})
+    return [(job_type, params)] + [
+        (fallback, dict(params)) for fallback in JOB_SOURCE_FALLBACKS.get(job_type, ())
+    ]
+
+
 def _wait_for_terminal(
     service,
     run_id: int,
@@ -173,13 +327,14 @@ def run_auto_init(
     inspect_fn: Callable[[], Tuple[bool, set, set]],
     *,
     stale_tables_fn: Optional[Callable[[], List[str]]] = None,
+    gap_details_fn: Optional[Callable[[], Dict[str, List[str]]]] = None,
     sleep: Callable[[float], None] = time.sleep,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     run_timeout: float = DEFAULT_RUN_TIMEOUT,
     checkpoint_path: Optional[Path] = None,
     run_date: Optional[str] = None,
 ) -> Dict[str, object]:
-    """串行执行补齐链。返回结果 dict（status: ok/success/failed/skipped/busy）。"""
+    """串行执行补齐链；详细缺口路径支持复扫验证和候选源切换。"""
     connected, existing, non_empty = inspect_fn()
     if not connected:
         logger.warning("[auto-init] 数据目录不可用，跳过本次初始化")
@@ -188,9 +343,33 @@ def run_auto_init(
     missing = [asset for asset in PARQUET_ASSETS if asset not in existing]
     empty = [asset for asset in PARQUET_ASSETS if asset in existing and asset not in non_empty]
     jobs = plan_init_jobs(missing, empty)
+    # 旧资产/最新断档路径保持原有单生产者行为，避免改变既有调用方合约。
+    candidates_by_job: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {
+        job: [(job, {})] for job in jobs
+    }
+    gap_table_by_job: Dict[str, str] = {}
 
-    # 日期断档检查：资产齐全但分区日期落后时追加日更回补作业
-    if stale_tables_fn is not None:
+    if gap_details_fn is not None:
+        try:
+            details = gap_details_fn() or {}
+            gap_specs = plan_coverage_gap_jobs(details)
+        except Exception as exc:  # noqa: BLE001 - 扫描失败不得误判数据完整
+            logger.warning(f"[auto-init] 历史完整性扫描失败: {exc}")
+            return {"status": "failed", "reason": "coverage_scan_failed", "completed": []}
+        if gap_specs:
+            gap_jobs = []
+            for spec in gap_specs:
+                job = str(spec["job_type"])
+                gap_jobs.append(job)
+                candidates_by_job[job] = list(spec["candidates"])
+                gap_table_by_job[job] = str(spec["table"])
+                if job not in jobs:
+                    jobs.append(job)
+            logger.info(
+                f"[auto-init] 日频历史缺口: {list(details)}，追加显式回补作业: {gap_jobs}"
+            )
+    elif stale_tables_fn is not None:
+        # 兼容旧调用方：仅最新日期断档，不启用新候选源语义。
         try:
             stale = list(stale_tables_fn() or [])
         except Exception as exc:  # noqa: BLE001 - 断档检查失败不应阻断资产链
@@ -200,11 +379,15 @@ def run_auto_init(
             gap_jobs = [j for j in plan_gap_fill_jobs(stale) if j not in jobs]
             logger.info(f"[auto-init] 日频断档: {stale}，追加回补作业: {gap_jobs}")
             jobs = jobs + gap_jobs
+            for job in gap_jobs:
+                candidates_by_job[job] = [(job, {})]
 
     maintenance_jobs = [j for j in NIGHTLY_MAINTENANCE_JOB_CHAIN if j not in jobs]
     if maintenance_jobs:
         logger.info(f"[auto-init] 追加每晚例行刷新: {maintenance_jobs}")
         jobs = jobs + maintenance_jobs
+        for job in maintenance_jobs:
+            candidates_by_job[job] = _default_job_candidates(job)
 
     if not jobs:
         if checkpoint_path:
@@ -220,6 +403,10 @@ def run_auto_init(
             completed = [
                 str(job) for job in checkpoint.get("completed_jobs", [])
                 if str(job) in jobs
+                and not (
+                    str(job) in gap_table_by_job
+                    and details.get(gap_table_by_job[str(job)])
+                )
             ]
         if completed:
             logger.info(f"[auto-init] 从链级检查点续跑，已完成: {completed}")
@@ -234,32 +421,59 @@ def run_auto_init(
     for job_type in jobs:
         if job_type in completed:
             continue
-        try:
-            run = service.submit(job_type, {})
-        except ValueError as exc:
-            # 页面上有人手动跑了同类型任务：礼让，不算失败，明天夜里再补
-            if "duplicate" in str(exc):
-                logger.info(f"[auto-init] {job_type} 已有在跑任务，本次礼让: {exc}")
-                return {"status": "busy", "completed": completed}
-            raise
-        logger.info(f"[auto-init] 已提交 {job_type} (run_id={run.id})，等待完成…")
-        final = _wait_for_terminal(
-            service, run.id,
-            sleep=sleep, poll_interval=poll_interval, timeout=wait_timeout,
-        )
-        if final != "success":
-            logger.warning(
-                f"[auto-init] {job_type} (run_id={run.id}) 未成功（{final}），链路中断"
+        attempted_jobs: List[str] = []
+        final = "failed"
+        succeeded = False
+        candidates = candidates_by_job.get(job_type) or [(job_type, {})]
+        for candidate_job, params in candidates:
+            attempted_jobs.append(candidate_job)
+            try:
+                run = service.submit(candidate_job, params)
+            except ValueError as exc:
+                # 同类型任务正在跑时不能并发切换另一个源写同一张表。
+                if "duplicate" in str(exc):
+                    logger.info(f"[auto-init] {candidate_job} 已有在跑任务，本次礼让: {exc}")
+                    return {"status": "busy", "completed": completed}
+                raise
+            logger.info(f"[auto-init] 已提交 {candidate_job} (run_id={run.id})，等待完成…")
+            final = _wait_for_terminal(
+                service, run.id,
+                sleep=sleep, poll_interval=poll_interval, timeout=wait_timeout,
             )
+            if final != "success":
+                logger.warning(f"[auto-init] {candidate_job} 未成功（{final}）")
+                continue
+
+            table = gap_table_by_job.get(job_type)
+            if table and gap_details_fn is not None:
+                try:
+                    residual = (gap_details_fn() or {}).get(table, [])
+                except Exception as exc:  # noqa: BLE001 - 无法验证就不能记成功
+                    logger.warning(f"[auto-init] {candidate_job} 后复扫失败: {exc}")
+                    final = "verification_failed"
+                    continue
+                if residual:
+                    logger.warning(
+                        f"[auto-init] {candidate_job} 返回成功但 {table} 仍有 "
+                        f"{len(residual)} 个缺口，尝试下一数据源"
+                    )
+                    final = "incomplete"
+                    continue
+            succeeded = True
+            break
+
+        if not succeeded:
+            logger.warning(f"[auto-init] 逻辑节点 {job_type} 所有候选均未完成，链路中断")
             return {
                 "status": "failed",
                 "failed_job": job_type,
                 "final_status": final,
+                "attempted_jobs": attempted_jobs,
                 "completed": completed,
             }
         completed.append(job_type)
         if checkpoint_path:
-            # 仅在上游任务成功后推进链级游标，重启不会重复已完成节点。
+            # 仅在执行成功且详细缺口复扫通过后推进链级游标。
             save_checkpoint(checkpoint_path, {
                 "version": 1,
                 "run_date": run_date,
@@ -399,7 +613,7 @@ class AutoInitScheduler:
                 lambda: run_auto_init(
                     service,
                     lambda: inspect_parquet_data_assets(data_dir),
-                    stale_tables_fn=lambda: find_stale_daily_tables(data_dir),
+                    gap_details_fn=lambda: find_daily_coverage_gaps(data_dir),
                     checkpoint_path=self.progress_path,
                     run_date=run_date,
                 ),
@@ -479,12 +693,12 @@ def start_auto_init(app) -> Optional[AutoInitScheduler]:
             if not connected:
                 logger.warning("[auto-init] 启动检查：数据目录不可用，等待夜间调度")
                 return
-            stale = find_stale_daily_tables(data_dir)
+            stale = find_daily_coverage_gaps(data_dir)
             if not missing and not empty and not stale:
-                logger.info("[auto-init] 启动检查：数据资产齐全且无断档，无需补跑")
+                logger.info("[auto-init] 启动检查：数据资产完整且无断档，无需补跑")
                 return
             logger.info(
-                f"[auto-init] 启动检查：缺失 {missing + empty}，断档 {stale}，后台补跑"
+                f"[auto-init] 启动检查：缺失 {missing + empty}，断档 {list(stale)}，后台补跑"
             )
             # 补跑不占调度器的当日额度（不 mark_run），夜里仍按原计划巡检
             if scheduler._run_lock.acquire(blocking=False):

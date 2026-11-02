@@ -35,7 +35,7 @@ from loguru import logger
 
 from app.utils.data_sources.fuyao_client import FuyaoClient
 from app.utils.data_sources.fuyao_normalize import financial_items_to_frame
-from app.utils.parquet_job_helpers import env_bool, latest_partition_date
+from app.utils.parquet_job_helpers import env_bool, existing_partition_dates, latest_partition_date
 from app.utils.job_checkpoint import clear_checkpoint, load_checkpoint, plan_checkpoint_path, save_checkpoint
 from app.utils.parquet_writer import save_to_parquet
 
@@ -98,6 +98,31 @@ def resolve_fetch_periods(latest_local: Optional[str], expected: str) -> List[st
     return quarter_periods(start, expected)
 
 
+def find_missing_report_periods(
+    table: str, expected: str, data_dir: Optional[str] = None
+) -> List[str]:
+    """已有最早报告期至 expected 的标准季度缺口；坏/空分区不计为已覆盖。"""
+    from app.utils.parquet_job_helpers import _default_data_root
+    import pyarrow.parquet as pq
+
+    root = Path(data_dir or _default_data_root())
+    local = set()
+    for period in existing_partition_dates(table, data_dir=data_dir):
+        if period[4:] not in QUARTER_ENDS:
+            continue
+        path = (
+            root / table / f"year={period[:4]}" / f"month={period[4:6]}"
+            / f"day={period[6:]}" / "data.parquet"
+        )
+        try:
+            if path.is_file() and path.stat().st_size > 0 and pq.ParquetFile(path).metadata.num_rows > 0:
+                local.add(period)
+        except Exception:  # noqa: BLE001 - 坏报告期分区进入回补
+            continue
+    baseline = min(local) if local else f"{int(expected[:4]) - 5}0101"
+    return [period for period in quarter_periods(baseline, expected) if period not in local]
+
+
 def _read_existing_partition(table: str, end_date: str, data_dir: Optional[str]) -> Optional[pd.DataFrame]:
     clean = str(end_date).replace("-", "")
     # 回退口径必须与 save_to_parquet/latest_partition_date 一致（DATA_DIR 或项目 data/），
@@ -119,6 +144,20 @@ def _read_existing_partition(table: str, end_date: str, data_dir: Optional[str])
     except Exception as exc:  # noqa: BLE001 - 坏分区按空处理，靠新数据重建
         logger.warning(f"[financial_fuyao] 分区读取失败，将重建: {partition} ({exc})")
         return None
+
+
+def latest_period_has_coverage(
+    table: str, end_date: str, symbols: List[str], data_dir: Optional[str],
+    ratio: float = 0.8,
+) -> bool:
+    """最新报告期唯一标的数达到清单 80% 才视为完整，容忍退市/市场覆盖差异。"""
+    if not symbols:
+        return False
+    frame = _read_existing_partition(table, end_date, data_dir)
+    if frame is None or frame.empty or "ts_code" not in frame.columns:
+        return False
+    covered = int(frame["ts_code"].dropna().astype(str).nunique())
+    return covered >= len(symbols) * ratio
 
 
 def _merge_partition(existing: Optional[pd.DataFrame], new: pd.DataFrame) -> pd.DataFrame:
@@ -246,11 +285,20 @@ def main() -> int:
             {"expected": expected, "full_refresh": full_refresh, "symbols": symbols},
         )
         checkpoint = load_checkpoint(checkpoint_path)
-        if latest_local is not None and latest_local >= expected and not full_refresh and not checkpoint_path.is_file():
-            print(f"[financial_fuyao] {partition_table}: 本地 {latest_local} 已覆盖 {expected}，跳过")
+        missing_before = find_missing_report_periods(partition_table, expected, data_dir)
+        if (
+            latest_local is not None and latest_local >= expected and not full_refresh
+            and not checkpoint_path.is_file() and not missing_before
+            and latest_period_has_coverage(partition_table, expected, symbols, data_dir)
+        ):
+            print(f"[financial_fuyao] {partition_table}: 本地 {latest_local} 已完整覆盖 {expected}，跳过")
             continue
 
-        periods = resolve_fetch_periods(latest_local, expected)
+        baselines = list(missing_before)
+        if latest_local:
+            baselines.append(latest_local)
+        fetch_baseline = min(baselines) if baselines else None
+        periods = resolve_fetch_periods(fetch_baseline, expected)
         computed_limit = min(MAX_FETCH_PERIODS, max(2, len(periods) + (0 if full_refresh else 1)))
         limit = int(checkpoint.get("limit") or computed_limit)
         print(
@@ -268,10 +316,18 @@ def main() -> int:
             f"[financial_fuyao] {partition_table} 完成: periods={written_periods}, "
             f"total_upsert={written_rows}"
         )
+        coverage_ok = latest_period_has_coverage(partition_table, expected, symbols, data_dir)
+        missing_after = find_missing_report_periods(partition_table, expected, data_dir)
+        if missing_after:
+            print(f"[financial_fuyao] {partition_table}: 仍缺 {len(missing_after)} 个报告期: {missing_after}")
+            overall_exit = 1
+        if not coverage_ok:
+            print(f"[financial_fuyao] {partition_table}: 最新报告期 {expected} 仍残缺，保留检查点并切换/重试")
+            overall_exit = 1
         if failed_symbols:
             print(f"[financial_fuyao] {partition_table}: {len(failed_symbols)} 只标的失败，保留检查点供自动重试")
             overall_exit = 1
-        else:
+        if coverage_ok and not missing_after and not failed_symbols:
             clear_checkpoint(checkpoint_path)
         if fetched_ok == 0 and not checkpoint.get("completed_symbols"):
             print(f"[financial_fuyao] {partition_table}: 全部标的拉取失败，作业标记失败")

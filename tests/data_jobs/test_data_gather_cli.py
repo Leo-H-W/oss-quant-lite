@@ -80,6 +80,25 @@ def _write_runs(root):
     ]).to_parquet(state / "data_job_runs.parquet")
 
 
+def test_status_reports_daily_completeness(monkeypatch, tmp_path, capsys):
+    dates = ["20260102", "20260105", "20260106"]
+    pd.DataFrame({
+        "exchange": ["SSE"] * 3, "cal_date": dates, "is_open": [1] * 3,
+        "pretrade_date": [""] * 3,
+    }).to_parquet(tmp_path / "stock_trade_calendar.parquet")
+    for date in dates:
+        _partition(tmp_path, "daily_history/daily", date)
+    _partition(tmp_path, "daily_basic/daily", "20260102")
+    _partition(tmp_path, "daily_basic/daily", "20260106")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    cli = _load_cli()
+
+    assert cli.main(["status"]) == 0
+    output = capsys.readouterr().out
+    assert "日线行情：20260102-20260106（3 个分区），数据无缺失" in output
+    assert "每日指标：20260102-20260106（2 个分区），缺失/残缺 1 天（20260105~20260105）" in output
+
+
 def test_status_lists_active_data_sync_runs(monkeypatch, tmp_path, capsys):
     _write_runs(tmp_path)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))

@@ -40,6 +40,10 @@
 | 扶摇与衍生计算回补检查点 | tests/data_jobs/test_remaining_resume_contracts.py | module_data_jobs |
 | 隐藏/独立回补与快照失败合约 | tests/data_jobs/test_additional_resume_contracts.py | module_data_jobs |
 | data-gather CLI 状态、更新、活动任务与重试覆盖 | tests/data_jobs/test_data_gather_cli.py | module_data_jobs |
+| 夜间历史缺口、复扫验证、检查点与数据源切换 | tests/data_jobs/test_nightly_completeness.py | module_data_jobs |
+| 腾讯日线备用源解析、合并非空字段与断点 | tests/data_jobs/test_tencent_daily.py | module_data_jobs |
+| 财务历史报告期、最新期完整度与备用源（含东方财富全市场历史回补） | tests/data_jobs/test_financial_completeness.py | module_data_jobs |
+| 因子默认历史空洞修复与落盘验证 | tests/data_jobs/test_factor_history_gaps.py | module_data_jobs |
 
 ### 健康度监控验收标准（2026-10-26 新增）
 
@@ -61,5 +65,5 @@ daily_basic 出现 631/5572 行的残缺分区却被视为"已有数据"。
 - 无（数据入口模块）
 
 ## 验收状态
-- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed；2026-10-26 健康度监控新增后：197 passed；2026-10-31 断点续跑/自动重试/后台 CLI 新增后：256 passed）
+- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed；2026-10-26 健康度监控新增后：197 passed；2026-10-31 断点续跑/自动重试/后台 CLI 新增后：256 passed；2026-11-01 历史完整性与数据源切换后：281 passed；2026-11-02 东方财富财务备用源新增后：285 passed）
 - [ ] 数值软目标：N/A

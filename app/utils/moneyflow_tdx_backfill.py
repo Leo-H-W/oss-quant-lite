@@ -98,16 +98,22 @@ def main() -> int:
     )
 
     today = pd.Timestamp.now().strftime("%Y%m%d")
-    start = normalize_ymd(os.getenv("MONEYFLOW_BACKFILL_START")) or f"{today[:4]}0101"
-    end = normalize_ymd(os.getenv("MONEYFLOW_END_DATE") or os.getenv("MONEYFLOW_BACKFILL_END")) or today
+    start = normalize_ymd(
+        os.getenv("DATA_JOB_START_DATE") or os.getenv("MONEYFLOW_BACKFILL_START")
+    ) or f"{today[:4]}0101"
+    end = normalize_ymd(
+        os.getenv("DATA_JOB_END_DATE") or os.getenv("MONEYFLOW_END_DATE")
+        or os.getenv("MONEYFLOW_BACKFILL_END")
+    ) or today
     shards = int(os.getenv("MONEYFLOW_BACKFILL_SHARDS", "1"))
     shard_index = int(os.getenv("MONEYFLOW_BACKFILL_SHARD_INDEX", "0"))
 
-    cal = pd.read_parquet(_PROJECT_ROOT / "data" / "stock_trade_calendar.parquet")
+    data_root = Path(os.getenv("DATA_DIR", str(_PROJECT_ROOT / "data")))
+    cal = pd.read_parquet(data_root / "stock_trade_calendar.parquet")
     open_dates = [str(d) for d in cal.loc[cal["is_open"] == 1, "cal_date"]]
     dates = list_backfill_dates(open_dates, start, end)
 
-    basic = pd.read_parquet(_PROJECT_ROOT / "data" / "stock_basic.parquet")
+    basic = pd.read_parquet(data_root / "stock_basic.parquet")
     ts_codes = sorted(basic["ts_code"].dropna().astype(str).unique().tolist())
     ts_codes = [c for c in ts_codes if not c.endswith(".BJ")]
     only = os.getenv("MONEYFLOW_TDX_CODES")
@@ -115,7 +121,6 @@ def main() -> int:
         wanted = {c.strip() for c in only.split(",") if c.strip()}
         ts_codes = [c for c in ts_codes if c in wanted]
 
-    data_root = _PROJECT_ROOT / "data"
     checkpoint_root = data_root / "data_job_state" / "checkpoints"
 
     def date_checkpoint(ymd):

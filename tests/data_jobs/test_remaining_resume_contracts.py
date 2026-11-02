@@ -48,6 +48,8 @@ def test_financial_fuyao_resumes_symbols_and_fails_on_partial(monkeypatch, tmp_p
     monkeypatch.setattr(financial_fuyao, "latest_partition_date", lambda *_a, **_kw: None)
     monkeypatch.setattr(financial_fuyao, "all_stock_codes", lambda client=None: ["A", "B", "C"])
     monkeypatch.setattr(financial_fuyao, "_read_existing_partition", lambda *_a: None)
+    monkeypatch.setattr(financial_fuyao, "latest_period_has_coverage", lambda *_a, **_kw: True)
+    monkeypatch.setattr(financial_fuyao, "find_missing_report_periods", lambda *_a, **_kw: [])
     monkeypatch.setattr(financial_fuyao, "save_to_parquet", lambda *_a, **_kw: 1)
     monkeypatch.setattr(
         financial_fuyao, "financial_items_to_frame",
