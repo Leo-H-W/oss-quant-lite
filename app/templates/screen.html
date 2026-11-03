@@ -26,27 +26,13 @@
                             <div class="col-12">
                                 <h6 class="text-primary">基本条件</h6>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-6">
                                 <label for="industry-filter" class="form-label">行业</label>
                                 <select class="form-select" id="industry-filter">
                                     <option value="">全部行业</option>
                                 </select>
                             </div>
-                            <div class="col-md-3">
-                                <label for="area-filter" class="form-label">地域</label>
-                                <select class="form-select" id="area-filter">
-                                    <option value="">全部地域</option>
-                                </select>
-                            </div>
-                            <div class="col-md-3">
-                                <label for="market-filter" class="form-label">市场</label>
-                                <select class="form-select" id="market-filter">
-                                    <option value="">全部市场</option>
-                                    <option value="SZ">深圳</option>
-                                    <option value="SH">上海</option>
-                                </select>
-                            </div>
-                            <div class="col-md-3">
+                            <div class="col-md-6">
                                 <label for="date-filter" class="form-label">数据日期</label>
                                 <input type="date" class="form-control" id="date-filter" title="选择特定日期的数据，留空则使用最新数据">
                             </div>
@@ -402,18 +388,6 @@ async function loadFilterOptions() {
                 select.appendChild(option);
             });
         }
-
-        // 加载地域列表
-        const areasResponse = await apiRequest('/areas');
-        if (areasResponse.code === 200) {
-            const select = document.getElementById('area-filter');
-            areasResponse.data.forEach(area => {
-                const option = document.createElement('option');
-                option.value = area;
-                option.textContent = area;
-                select.appendChild(option);
-            });
-        }
     } catch (error) {
         console.error('加载筛选选项失败:', error);
     }
@@ -646,11 +620,6 @@ function formatCriteria(criteria) {
     
     // 基本条件
     if (criteria.industry) conditions.push(`行业=${criteria.industry}`);
-    if (criteria.area) conditions.push(`地域=${criteria.area}`);
-    if (criteria.market) {
-        const marketName = criteria.market === 'SZ' ? '深圳' : criteria.market === 'SH' ? '上海' : criteria.market;
-        conditions.push(`市场=${marketName}`);
-    }
     if (criteria.trade_date) conditions.push(`数据日期=${criteria.trade_date}`);
     
     // 数值范围条件
@@ -764,8 +733,6 @@ function applyTemplate(conditions) {
     
     // 应用基本条件
     if (conditions.industry) document.getElementById('industry-filter').value = conditions.industry;
-    if (conditions.area) document.getElementById('area-filter').value = conditions.area;
-    if (conditions.market) document.getElementById('market-filter').value = conditions.market;
     if (conditions.trade_date) document.getElementById('date-filter').value = conditions.trade_date;
     
     // 应用估值指标
@@ -872,8 +839,6 @@ function getCurrentCriteria() {
 
     // 基本条件
     setIfPresent('industry', document.getElementById('industry-filter').value);
-    setIfPresent('area', document.getElementById('area-filter').value);
-    setIfPresent('market', document.getElementById('market-filter').value);
     setIfPresent('trade_date', document.getElementById('date-filter').value);
 
     // 估值指标
