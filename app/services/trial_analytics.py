@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.services.market_snapshot import load_latest_market_snapshot
+
 
 def normalize_ts_code(code):
     """6 位裸代码补交易所后缀；已是 ts_code（带后缀）则原样返回。"""
@@ -27,10 +29,12 @@ def _wide_table_path():
 def _read_latest_day(required_cols):
     """读取大宽表并截取最新交易日，返回 (day_df, latest_trade_date)；缺列/空数据抛 ValueError。"""
     data_path = _wide_table_path()
-    if not data_path.exists():
-        raise FileNotFoundError(f'数据文件不存在: {data_path}')
-
-    df = pd.read_parquet(data_path)
+    if data_path.exists():
+        # 兼容仍提供旧版完整宽表的部署。
+        df = pd.read_parquet(data_path)
+    else:
+        # 当前标准数据链只有分区表；资金流统计等试用功能直接复用最新快照。
+        df = load_latest_market_snapshot()
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f'缺少必要字段: {", ".join(missing_cols)}')

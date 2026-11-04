@@ -26,5 +26,5 @@ def index():
             sectors_json=[],
             stocks_json=[],
             trade_date='',
-            error='数据加载失败，请确认 data/data.parquet 是否存在',
+            error='数据加载失败，请检查最新行情分区与股票基础资料是否完整',
         )

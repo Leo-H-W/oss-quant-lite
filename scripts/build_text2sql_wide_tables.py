@@ -41,8 +41,11 @@ DATA = os.path.join(ROOT, "data")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("build_wide")
 
-# 下游实际用到的列（open/pre_close/change 等不读，省内存）
-HIST_COLS = ["ts_code", "trade_date", "close", "low", "high", "pct_chg", "vol", "amount"]
+# 下游实际用到的列（change 等不读，省内存）
+HIST_COLS = [
+    "ts_code", "trade_date", "open", "close", "low", "high", "pre_close",
+    "pct_chg", "vol", "amount",
+]
 BASIC_COLS = ["ts_code", "trade_date", "pe", "pe_ttm", "pb", "turnover_rate", "total_mv", "circ_mv"]
 
 # 每批处理的股票数：300 只 ≈ 60 万行 ≈ 几十 MB，远小于内存上限
@@ -59,6 +62,7 @@ BUSINESS_COLS = [
     "factor_macd", "factor_macd_dif", "factor_macd_dea",
     "factor_rsi_6", "factor_rsi_12", "factor_rsi_24",
     "factor_kdj_k", "factor_kdj_d", "factor_kdj_j",
+    "trend_up_start",
 ]
 MA_COLS = ["ts_code", "trade_date"] + [f"ma{n}" for n in (5, 10, 20, 30, 60, 120)]
 
@@ -88,7 +92,14 @@ def read_partitioned(subdir: str, columns, categories: dict, since: str = None) 
     """
     frames = []
     for f in _list_files(subdir):
-        part = pd.read_parquet(f, columns=columns)
+        # 历史分区可能来自不同数据源，较旧分区不一定有 pe 等后加字段。
+        # 只读实际存在的列，其余补 NaN，避免单个旧分区中止整表构建。
+        available = set(pq.read_schema(f).names)
+        part = pd.read_parquet(f, columns=[col for col in columns if col in available])
+        for col in columns:
+            if col not in part.columns:
+                part[col] = np.nan
+        part = part.loc[:, columns]
         if since is not None and "trade_date" in part.columns:
             # trade_date 为 YYYY-MM-DD 字符串，可直接按字典序过滤
             part = part[part["trade_date"] >= since]
@@ -138,6 +149,23 @@ def add_technical_factors(g: pd.DataFrame) -> pd.DataFrame:
     # 均线
     for n in (5, 10, 20, 30, 60, 120):
         g[f"ma{n}"] = close.rolling(n, min_periods=1).mean().astype(np.float32)
+
+    # 趋势启动：MM=EMA((3*C+H+L+O)/6,21)，UP=MM>=HHV(MM,5)。
+    # 仅在 UP 从 0 跳变为 1 且累计 K 线不少于 30 根时输出 1。
+    # 用 pre_close 链式重建后复权 OHLC，避免除权除息缺口产生假信号。
+    adjust_factor = (close.shift(1) / g["pre_close"]).fillna(1.0).cumprod()
+    adjusted_close = close * adjust_factor
+    source = (
+        3 * adjusted_close
+        + g["high"] * adjust_factor
+        + g["low"] * adjust_factor
+        + g["open"] * adjust_factor
+    ) / 6
+    mm = ema(source, 21)
+    up = mm >= mm.rolling(5, min_periods=1).max()
+    enough_bars = np.arange(1, len(g) + 1) >= 30
+    trend_up_start = up & ~up.shift(1, fill_value=False) & enough_bars
+    g["trend_up_start"] = trend_up_start.astype(np.float32)
     return g
 
 

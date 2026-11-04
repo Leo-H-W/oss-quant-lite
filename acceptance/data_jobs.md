@@ -44,6 +44,21 @@
 | 腾讯日线备用源解析、合并非空字段与断点 | tests/data_jobs/test_tencent_daily.py | module_data_jobs |
 | 财务历史报告期、最新期完整度与备用源（含东方财富全市场历史回补） | tests/data_jobs/test_financial_completeness.py | module_data_jobs |
 | 因子默认历史空洞修复与落盘验证 | tests/data_jobs/test_factor_history_gaps.py | module_data_jobs |
+| 趋势启动信号计算、宽表 schema、选股过滤与 Web 字段 | tests/data_jobs/test_trend_up_start_contract.py、tests/ui/test_screen_trend_up_start_contract.py | module_data_jobs |
+
+### 趋势启动信号验收标准（2026-11-03 新增）
+
+设计：在 Text2SQL/选股大宽表按股票构建技术指标时，以后复权 OHLC 计算
+`MM=EMA((3*C+H+L+O)/6,21)`、`UP=MM>=HHV(MM,5)`。当 `UP` 当日为 1、
+前一日为 0 且累计 K 线不少于 30 根时，输出 `trend_up_start=1`，其余为 0。
+字段写入 `stock_business.parquet`，选股页动态条件以 `trend_up_start = 1` 过滤。
+
+- 信号只在状态跳变日为 1，持续 UP 不重复触发；不足 30 根 K 线始终为 0
+- 宽表输入包含计算所需 OHLC/pre_close，输出 schema 包含 `trend_up_start`
+- `StockService.screen_stocks` 的动态条件可实际过滤该字段
+- Web 可用字段显示“趋势启动信号”并传递 `trend_up_start`
+- 验收命令：`pytest -m module_data_jobs -q`
+- 数值软目标：无（确定性 0/1 信号，以结构性合约为准）
 
 ### 健康度监控验收标准（2026-10-26 新增）
 

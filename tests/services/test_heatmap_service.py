@@ -29,14 +29,14 @@ def service():
 class TestGetHeatmapData:
     """Test HeatmapService.get_heatmap_data()."""
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_returns_two_lists(self, mock_read, service, sample_df):
         mock_read.return_value = sample_df
         sectors, stocks = service.get_heatmap_data()
         assert isinstance(sectors, list)
         assert isinstance(stocks, list)
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_filters_suspended_stocks(self, mock_read, service, sample_df):
         """Stocks with close == 0 should be excluded."""
         mock_read.return_value = sample_df
@@ -44,14 +44,14 @@ class TestGetHeatmapData:
         stock_names = [s['name'] for s in stocks]
         assert '停牌股' not in stock_names
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_sector_count(self, mock_read, service, sample_df):
         mock_read.return_value = sample_df
         sectors, _ = service.get_heatmap_data()
         industry_names = [s['name'] for s in sectors]
         assert len(industry_names) == 2  # 银行 + 全国地产
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_sector_weighted_pct_chg(self, mock_read, service, sample_df):
         """avg_pct_chg should be market-cap weighted average."""
         mock_read.return_value = sample_df
@@ -60,14 +60,14 @@ class TestGetHeatmapData:
         # Weighted: (1.5*21300 + 0.5*5000) / (21300+5000) = 34450/26300 ≈ 1.3103
         assert abs(bank['avg_pct_chg'] - 1.3103) < 0.01
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_sector_stock_count(self, mock_read, service, sample_df):
         mock_read.return_value = sample_df
         sectors, _ = service.get_heatmap_data()
         bank = next(s for s in sectors if s['name'] == '银行')
         assert bank['stock_count'] == 2  # 2 银行 after filtering
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_sector_up_down_count(self, mock_read, service, sample_df):
         mock_read.return_value = sample_df
         sectors, _ = service.get_heatmap_data()
@@ -75,7 +75,7 @@ class TestGetHeatmapData:
         assert realestate['down_count'] == 2
         assert realestate['up_count'] == 0
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_stocks_have_required_fields(self, mock_read, service, sample_df):
         mock_read.return_value = sample_df
         _, stocks = service.get_heatmap_data()
@@ -84,7 +84,7 @@ class TestGetHeatmapData:
         for s in stocks:
             assert required.issubset(s.keys()), f"Missing keys: {required - s.keys()}"
 
-    @patch('app.services.heatmap_service.pd.read_parquet')
+    @patch('app.services.heatmap_service.load_latest_market_snapshot')
     def test_trade_date_returned(self, mock_read, service, sample_df):
         mock_read.return_value = sample_df
         sectors, _ = service.get_heatmap_data()

@@ -1,56 +1,51 @@
-"""板块热力图数据服务 — 读取 data/data.parquet 并按行业聚合。"""
-import os
-import pandas as pd
+"""板块热力图数据服务 — 读取真实 Parquet 分区并按行业聚合。"""
 import numpy as np
+import pandas as pd
+
+from app.services.market_snapshot import load_latest_market_snapshot
 
 
 class HeatmapService:
     """板块热力图数据聚合服务。"""
 
-    def __init__(self):
-        self._data_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            'data', 'data.parquet'
-        )
-
     def get_heatmap_data(self):
-        """读取 parquet，返回 (sectors_json, stocks_json)。
+        """返回 (sectors_json, stocks_json)，个股按涨跌幅降序。"""
+        df = load_latest_market_snapshot(include_market_cap=True).copy()
+        if df.empty:
+            raise ValueError("最新市场快照为空")
+        df["trade_date"] = df["trade_date"].astype(str)
+        trade_date = df["trade_date"].max()
 
-        Returns:
-            tuple: (list[dict], list[dict])
-                - sectors: 板块聚合数据，按 total_mv 降序
-                - stocks: 全量个股数据（已过滤停牌）
-        """
-        df = pd.read_parquet(self._data_path)
-        trade_date = str(df['trade_date'].iloc[0])
+        for column in ("close", "pct_chg", "total_mv", "net_mf_amount", "turnover_rate"):
+            df[column] = pd.to_numeric(df[column], errors="coerce")
 
-        # 过滤停牌/退市
-        df = df[df['close'] > 0].copy()
+        # 过滤停牌/退市及无行业归属记录；缺失值不做零值填充。
+        df = df[(df["close"] > 0) & df["industry"].notna()].copy()
 
-        # 板块聚合
         sectors = []
-        for industry, group in df.groupby('industry'):
-            total_mv_sum = group['total_mv'].sum()
-            if total_mv_sum == 0:
+        for industry, group in df.groupby("industry"):
+            weighted = group[(group["total_mv"] > 0) & group["pct_chg"].notna()]
+            if weighted.empty:
                 continue
-            avg_pct_chg = np.average(group['pct_chg'], weights=group['total_mv'])
+            total_mv_sum = float(weighted["total_mv"].sum())
+            avg_pct_chg = np.average(weighted["pct_chg"], weights=weighted["total_mv"])
             sectors.append({
-                'name': industry,
-                'avg_pct_chg': round(avg_pct_chg, 2),
-                'total_mv': round(total_mv_sum, 2),
-                'stock_count': len(group),
-                'up_count': int((group['pct_chg'] > 0).sum()),
-                'down_count': int((group['pct_chg'] < 0).sum()),
-                'net_mf_amount': round(group['net_mf_amount'].sum(), 2),
-                'trade_date': trade_date,
+                "name": industry,
+                "avg_pct_chg": round(float(avg_pct_chg), 2),
+                "total_mv": round(total_mv_sum, 2),
+                "stock_count": int(len(group)),
+                "up_count": int((group["pct_chg"] > 0).sum()),
+                "down_count": int((group["pct_chg"] < 0).sum()),
+                "net_mf_amount": round(float(group["net_mf_amount"].sum()), 2),
+                "trade_date": trade_date,
             })
 
-        sectors.sort(key=lambda x: x['total_mv'], reverse=True)
+        sectors.sort(key=lambda item: item["total_mv"], reverse=True)
 
-        # 个股明细
-        stock_cols = ['ts_code', 'name', 'industry', 'pct_chg', 'close',
-                      'total_mv', 'net_mf_amount', 'turnover_rate']
-        stocks_df = df[stock_cols].sort_values('pct_chg', ascending=False)
-        stocks = stocks_df.where(stocks_df.notna(), None).to_dict(orient='records')
-
+        stock_cols = [
+            "ts_code", "name", "industry", "pct_chg", "close",
+            "total_mv", "net_mf_amount", "turnover_rate",
+        ]
+        stocks_df = df[stock_cols].sort_values("pct_chg", ascending=False)
+        stocks = stocks_df.astype(object).where(stocks_df.notna(), None).to_dict(orient="records")
         return sectors, stocks
