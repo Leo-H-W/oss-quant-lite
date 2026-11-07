@@ -45,6 +45,23 @@
 | 财务历史报告期、最新期完整度与备用源（含东方财富全市场历史回补） | tests/data_jobs/test_financial_completeness.py | module_data_jobs |
 | 因子默认历史空洞修复与落盘验证 | tests/data_jobs/test_factor_history_gaps.py | module_data_jobs |
 | 趋势启动信号计算、宽表 schema、选股过滤与 Web 字段 | tests/data_jobs/test_trend_up_start_contract.py、tests/ui/test_screen_trend_up_start_contract.py | module_data_jobs |
+| 通达信服务器并发测速、显式主机顺序、请求异常与失败回退 | tests/services/test_tongdaxin_client.py | module_data_jobs |
+| 分钟线/历史分笔分页边界与重复页保护 | tests/services/test_tongdaxin_minute_sync_service.py、tests/data_jobs/test_moneyflow_tdx_backfill.py | module_data_jobs |
+
+### 通达信连接与分页增强验收标准（2026-11-07 新增）
+
+设计：借鉴 [easy-tdx](https://github.com/clong365/easy_tdx) 的服务器测速、自动分页
+和重复分页保护，复用项目现有 `pytdx`，不引入要求 Python 3.10+ 的新依赖。
+其免费日 K 方向虽有价值，但 2026-11-07 实测现有 pytdx 标准协议在 12 台候选服务器
+均无法返回日 K，因此未将未验证的日线备用源接入夜间链路。
+
+- 默认连接先并发探测候选服务器并按延迟排序，实际连接失败后继续尝试下一台；
+  显式传入的主机列表保持调用方顺序，避免破坏历史回补分片的服务器钉住策略；
+  请求异常必须抛出，禁止被 pytdx 吞成 `None` 后在资金流中写成全 0
+- 分钟线请求区间早于最新 800 根时继续翻页；分笔接口返回重复页或超过安全上限时
+  明确失败，禁止死循环或将残缺结果标记完成
+- 验收命令：`pytest -m module_data_jobs -q`
+- 数值软目标：无（分页与故障处理均以结构性合约为准；真实服务器时延不作为门禁）
 
 ### 趋势启动信号验收标准（2026-11-03 新增）
 
@@ -80,5 +97,5 @@ daily_basic 出现 631/5572 行的残缺分区却被视为"已有数据"。
 - 无（数据入口模块）
 
 ## 验收状态
-- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed；2026-10-26 健康度监控新增后：197 passed；2026-10-31 断点续跑/自动重试/后台 CLI 新增后：256 passed；2026-11-01 历史完整性与数据源切换后：281 passed；2026-11-02 东方财富财务备用源新增后：285 passed）
+- [x] 结构性合约：CI 绿（pytest -m module_data_jobs，2026-09-25：135 passed；2026-10-26 健康度监控新增后：197 passed；2026-10-31 断点续跑/自动重试/后台 CLI 新增后：256 passed；2026-11-01 历史完整性与数据源切换后：281 passed；2026-11-02 东方财富财务备用源新增后：285 passed；2026-11-07 通达信连接与分页增强后：299 passed，全量回归 909 passed）
 - [ ] 数值软目标：N/A

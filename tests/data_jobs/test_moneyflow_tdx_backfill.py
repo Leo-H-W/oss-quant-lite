@@ -89,3 +89,24 @@ def test_shard_dates_rejects_invalid_params():
         shard_dates(["20261023"], 0, 0)
     with pytest.raises(ValueError):
         shard_dates(["20261023"], 2, 2)
+
+
+# ---------------------------------------------------------------------------
+# 分笔分页保护
+# ---------------------------------------------------------------------------
+
+def test_history_transaction_repeated_page_fails_instead_of_looping(monkeypatch):
+    from app.utils import moneyflow_tdx
+
+    monkeypatch.setattr(moneyflow_tdx, "PAGE_SIZE", 2)
+    page = [
+        {"time": "09:30:00", "price": 10.0, "vol": 1, "buyorsell": 0},
+        {"time": "09:30:01", "price": 10.1, "vol": 2, "buyorsell": 1},
+    ]
+
+    class FakeApi:
+        def get_history_transaction_data(self, *_args):
+            return page
+
+    with pytest.raises(RuntimeError, match="重复"):
+        moneyflow_tdx.aggregate_stock(FakeApi(), "600519.SH", 20261023)

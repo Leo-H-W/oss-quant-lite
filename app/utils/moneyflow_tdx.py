@@ -38,6 +38,7 @@ from app.utils.parquet_writer import save_to_parquet  # noqa: E402
 
 REL_TABLE = "moneyflow/daily"
 PAGE_SIZE = 800
+MAX_TRANSACTION_OFFSET = 2_000_000
 PAGE_INTERVAL = 0.05
 CHUNK_STOCKS = 200
 CHECKPOINT_ROOT = _PROJECT_ROOT / "data" / "data_job_state" / "checkpoints"
@@ -72,10 +73,18 @@ def aggregate_stock(api, ts_code: str, date_int: int) -> dict:
     agg = {f"{side}_{tag}_{unit}": 0.0
            for tag, _, _ in BUCKETS for side in ("buy", "sell") for unit in ("vol", "amount")}
     start = 0
-    while True:
+    seen_pages = set()
+    while start < MAX_TRANSACTION_OFFSET:
         batch = api.get_history_transaction_data(market, code, start, PAGE_SIZE, date_int)
         if not batch:
             break
+        page_signature = tuple(
+            (tick.get("time"), tick.get("price"), tick.get("vol"), tick.get("buyorsell"))
+            for tick in batch
+        )
+        if page_signature in seen_pages:
+            raise RuntimeError(f"通达信分笔返回重复分页: {ts_code}, offset={start}")
+        seen_pages.add(page_signature)
         for tick in batch:
             vol = float(tick.get("vol") or 0)          # 手
             amount = float(tick.get("price") or 0) * vol * 100.0  # 元
@@ -95,6 +104,8 @@ def aggregate_stock(api, ts_code: str, date_int: int) -> dict:
         if len(batch) < PAGE_SIZE:
             break
         time.sleep(PAGE_INTERVAL)
+    else:
+        raise RuntimeError(f"通达信分笔分页超过安全上限: {ts_code}")
 
     row = {"ts_code": ts_code, "trade_date": "", **agg}
     row["net_mf_vol"] = (agg["buy_lg_vol"] + agg["buy_elg_vol"]

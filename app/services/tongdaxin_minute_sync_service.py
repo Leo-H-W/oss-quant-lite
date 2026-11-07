@@ -12,6 +12,9 @@ from app.services.tongdaxin.code_mapping import any_style_code_to_tdx
 
 logger = logging.getLogger(__name__)
 
+MINUTE_PAGE_SIZE = 800
+MAX_MINUTE_PAGES = 100
+
 
 class TongdaxinMinuteSyncService:
     PERIOD_TYPES = {"5min": 0, "15min": 1, "30min": 2, "60min": 3}
@@ -36,12 +39,42 @@ class TongdaxinMinuteSyncService:
     def _fetch_minute_payload(self, ts_code: str, period_type: str, start_date: str, end_date: str):
         market, code = any_style_code_to_tdx(ts_code)
         category = period_type_to_tdx_category(period_type)
-        payload = self.api.get_security_bars(category, market, code, 0, 800) or []
         start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
         end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        payload = []
+        seen_pages = set()
+        offset = 0
+        for _page in range(MAX_MINUTE_PAGES):
+            batch = self.api.get_security_bars(
+                category, market, code, offset, MINUTE_PAGE_SIZE
+            ) or []
+            if not batch:
+                break
+            signature = tuple(
+                (row.get("datetime"), row.get("close"), row.get("vol")) for row in batch
+            )
+            if signature in seen_pages:
+                raise RuntimeError(f"通达信分钟线返回重复分页: {ts_code}, offset={offset}")
+            seen_pages.add(signature)
+            payload = list(batch) + payload
+            offset += len(batch)
+            dates = []
+            for row in batch:
+                try:
+                    dates.append(datetime.strptime(str(row["datetime"])[:16], "%Y-%m-%d %H:%M").date())
+                except (KeyError, ValueError):
+                    continue
+            if len(batch) < MINUTE_PAGE_SIZE or (dates and min(dates) <= start_dt):
+                break
+        else:
+            raise RuntimeError(f"通达信分钟线分页超过安全上限: {ts_code}")
+
         filtered = []
         for row in payload:
-            row_dt = datetime.strptime(str(row["datetime"])[:16], "%Y-%m-%d %H:%M").date()
+            try:
+                row_dt = datetime.strptime(str(row["datetime"])[:16], "%Y-%m-%d %H:%M").date()
+            except (KeyError, ValueError):
+                continue
             if start_dt <= row_dt <= end_dt:
                 filtered.append(row)
         return filtered
